@@ -1,60 +1,129 @@
-# ClusterMonitor
+# Misha Monitor
 
-Lightweight Flask dashboard for monitoring the Oliver Lab compute servers. Runs on `augustine` and polls each host over SSH for GPU / CPU / RAM / disk / process info.
+A small Flask dashboard that polls Yale's Misha cluster over SSH and
+shows partition / node / GPU availability with a per-user login.
 
-![monitored hosts: ignatius · chesterton · aquinas · origen · augustine · bf65 · bf64]()
+Adapted from Carlos Gonzalez's Vanderbilt `compute_monitor`. The
+original Vanderbilt-specific code is preserved in [archive/](archive/).
 
-## Usage (for lab members)
+## What you get
 
-The dashboard is running continuously on `augustine:5111`. You don't run anything yourself — you just forward the port to your laptop.
+- **Per-node card grid** matching the OOD `cluster-status` look —
+  hostname, CPU alloc, RAM alloc, GPU type, GPU alloc — colored by
+  saturation.
+- **Per-GPU-type rollup** at the top: how many H100s / H200s / L40S /
+  A40 / A100 are free right now.
+- **Lab queue panel**: running and pending jobs for your SLURM account.
+- **Click any node** to see the jobs running on it (jobid, user,
+  account, GPUs, time used / time limit).
+- **Username + password login** — accounts managed via
+  [manage_users.py](manage_users.py); passwords hashed with PBKDF2.
 
-From **your laptop**, open a terminal and run:
+## How it works
+
+```
+   browser ──HTTPS──▶ DigitalOcean droplet (Caddy :443)
+                          │
+                          └─ reverse_proxy ─▶ Flask :5111
+                                                  ▲
+                                                  │ reads
+                                          /var/lib/monitor/snapshot.txt
+                                                  ▲
+                                                  │ ssh-pushes  (every 60s)
+                                                  │
+                          Misha SLURM job (`day` partition, 24h)
+                              ├─ runs sinfo / squeue
+                              ├─ pipes output via outbound SSH
+                              └─ submits its own successor before walltime
+```
+
+Misha is on Yale's network so its outbound SSH to your droplet works
+without VPN. The droplet has zero credentials for Misha — its only
+SSH-facing role is a `monitor` user whose authorized_key is locked
+down (via `command="/usr/local/bin/monitor-receive.sh"`) to a single
+write-the-snapshot-file action. Compromising the droplet leaks
+nothing about Misha.
+
+The SLURM job runs in the `day` partition with `--time=23:55:00`.
+Just before walltime, the script submits its own successor with
+`--dependency=afterany:$JOBID`, so the chain runs forever without
+manual intervention. We prefer `day` over `week` because short-
+walltime jobs schedule fast — handoffs are usually <1 min, invisible
+to dashboard users.
+
+The pusher runs three SLURM commands every 60s and pipes the raw
+output to the droplet:
 
 ```bash
-ssh -L 5111:localhost:5111 <your-vu-id>@augustine.csb.vanderbilt.edu
+sinfo  -h -p gpu,gpu_devel -N -O 'NodeHost,CPUsState,AllocMem,Memory,Gres,GresUsed,StateLong'
+squeue -h -p gpu,gpu_devel -t R -O 'NodeList,JobID,UserName,Account,TimeUsed,TimeLimit,tres-alloc,Name'
+squeue -h -p gpu,gpu_devel -t PD -O 'JobID,UserName,Account,Partition,Reason,TimeLimit,tres-alloc,Name'
 ```
 
-Leave that SSH session open, then in a browser go to:
+No `nvidia-smi` and no SSH-into-compute-nodes — everything is queried
+on the Misha login node and visible to any user.
+
+## Repo layout
 
 ```
-http://localhost:5111
+app.py                       Flask app on the droplet (auth + reads snapshot + JSON API)
+manage_users.py              CLI to add/remove/reset lab user accounts
+templates/
+    index.html               Dashboard (dark theme, partition + GPU-type grouping)
+    login.html               Login form
+demo.html                    Self-contained preview (no server needed)
+misha-side/
+    pusher.sbatch            SLURM job: polls Misha, pushes snapshot, self-resubmits
+    setup.md                 Misha-side install walkthrough
+deploy/
+    Caddyfile                Droplet TLS + reverse proxy
+    monitor-receive.sh       Lockdown script for the droplet's `monitor` SSH user
+    misha-monitor.service    systemd unit for Flask on the droplet
+    misha-monitor-tunnel.service   (alternative architecture — kept as fallback)
+    tunnel.sh                (alternative architecture — kept as fallback)
+.env.example                 Config template
+users.json.example           Credential file template
+requirements.txt             Flask + gunicorn
+static/img/favicon.png
+DEPLOY.md                    Deployment worksheet — fill in & follow
+archive/                     Original Vanderbilt code (kept for reference)
 ```
 
-That's it. The page auto-refreshes every 30 seconds.
+## Deploying
 
-If port `5111` is already in use on your laptop, map it to anything else:
+See [DEPLOY.md](DEPLOY.md). It's a worksheet — fill in your droplet
+IP, Yale host, netid, etc., and it walks through every step.
+
+## Local development
 
 ```bash
-ssh -L 8080:localhost:5111 <your-vu-id>@augustine.csb.vanderbilt.edu
-# then open http://localhost:8080
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+cp .env.example .env
+$EDITOR .env                              # set SECRET_KEY, MISHA_USER, MISHA_HOST
+
+.venv/bin/python manage_users.py add me --display "Me"
+
+set -a && source .env && set +a
+.venv/bin/python app.py
+# open http://127.0.0.1:5111 — sign in as 'me'
 ```
 
-## What you'll see
+## Limitations / honest caveats
 
-- **Overview** — mini cards for every server with CPU / RAM / GPU bars. Click one to jump to its full details.
-- **Users** — aggregated per-user view: who's using what, where, and how much.
-- **Details** — per-server view with all GPUs, top processes, and logged-in users.
-- **Warning dots** — a pulsing red dot appears on a server only when it's in genuine crash risk (RAM ≥ 95%, root disk ≥ 97%, GPU ≥ 90 °C). Click the dot for a specific suggestion on how to rescue the node.
-- **Easter egg** — double-click a theologian's portrait.
-
-## For the admin
-
-The dashboard lives in `/home/gonzc11/compute_monitor/` on `augustine`. It requires passwordless SSH from `augustine` to every host in the `SERVERS` list in `app.py`.
-
-Start / restart:
-
-```bash
-cd /home/gonzc11/compute_monitor
-pkill -f compute_monitor/app.py
-setsid nohup python3 app.py > app.log 2>&1 < /dev/null &
-```
-
-Check it's up:
-
-```bash
-curl -s -o /dev/null -w "HTTP %{http_code}\n" http://localhost:5111/
-```
-
-Adding a server — edit the `SERVERS` list in `app.py`, drop a portrait in `static/img/`, restart. Adding a user portrait — drop the image in `static/img/` and add an entry to `USER_MAP` in `templates/index.html`.
-
-Templates are cached, so restart after any HTML edit and hard-refresh the browser.
+- "GPU alloc" is **scheduler allocation**, not real-time utilization.
+  A node showing 4/4 GPUs allocated may have those GPUs sitting idle;
+  SLURM doesn't expose that, and you can only run `nvidia-smi` on
+  nodes where you have a job. For your own lab's nodes you can
+  optionally extend the poller to fan out via `clush -bw @user:$NETID
+  nvidia-smi …` and overlay true utilization. See the corresponding
+  TODO in `app.py`.
+- Job names from `squeue` are clipped to 60 characters. Adjust
+  `SQUEUE_FMT_R` / `SQUEUE_FMT_PD` in `app.py` if you want longer.
+- Pending-job `Reason` is whatever SLURM reports (`Resources`,
+  `Priority`, `QOSMaxJobsPerUserLimit`, etc.) — useful as-is, no
+  decoding.
+- The login system is intentionally minimal (a JSON file and PBKDF2
+  hashes). For more than ~20 users or any sort of audit need, swap in
+  Flask-Login + a real DB.

@@ -1,0 +1,42 @@
+# /etc/systemd/system/misha-monitor.service   (on the Yale-network host)
+#
+# Runs the Flask app via gunicorn, bound to 127.0.0.1:5111 so only the
+# reverse SSH tunnel can publish it. Edit User=, the WorkingDirectory,
+# and the EnvironmentFile path before enabling.
+#
+# Install:
+#   sudo cp deploy/misha-monitor.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now misha-monitor.service
+#   sudo systemctl status misha-monitor.service
+
+[Unit]
+Description=Misha cluster monitor (Flask)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=REPLACE_ME_USERNAME
+WorkingDirectory=/home/REPLACE_ME_USERNAME/ClusterMonitor
+EnvironmentFile=/home/REPLACE_ME_USERNAME/ClusterMonitor/.env
+ExecStart=/home/REPLACE_ME_USERNAME/ClusterMonitor/.venv/bin/gunicorn \
+    --bind 127.0.0.1:5111 \
+    --workers 2 \
+    --threads 4 \
+    --timeout 60 \
+    --access-logfile - \
+    --error-logfile - \
+    app:app
+Restart=always
+RestartSec=5
+
+# Mild hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/REPLACE_ME_USERNAME/ClusterMonitor
+
+[Install]
+WantedBy=multi-user.target

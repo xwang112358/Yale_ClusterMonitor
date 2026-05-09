@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign in &middot; Misha Monitor</title>
+<link rel="icon" type="image/png" href="/static/img/favicon.png">
+<style>
+  :root {
+    --bg: #0f1117;
+    --card: #1a1d27;
+    --card-border: #2a2d3a;
+    --text: #e0e0e0;
+    --text-dim: #888;
+    --accent: #6c8cff;
+    --red: #f44336;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .login-box {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 10px;
+    padding: 28px 32px;
+    width: 100%;
+    max-width: 360px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+  }
+  h1 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin-bottom: 4px;
+    letter-spacing: 0.5px;
+  }
+  .sub {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    margin-bottom: 20px;
+  }
+  label {
+    display: block;
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin: 12px 0 4px;
+  }
+  input[type=text], input[type=password] {
+    width: 100%;
+    background: #0f1117;
+    border: 1px solid var(--card-border);
+    border-radius: 5px;
+    padding: 8px 10px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.85rem;
+    transition: border-color 0.15s;
+  }
+  input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  button {
+    width: 100%;
+    margin-top: 20px;
+    background: var(--accent);
+    color: #0f1117;
+    border: 0;
+    border-radius: 5px;
+    padding: 9px 0;
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+  }
+  button:hover { filter: brightness(1.08); }
+  .err {
+    background: rgba(244, 67, 54, 0.12);
+    border: 1px solid rgba(244, 67, 54, 0.4);
+    color: var(--red);
+    padding: 8px 10px;
+    border-radius: 5px;
+    font-size: 0.78rem;
+    margin-bottom: 4px;
+    margin-top: 14px;
+  }
+  .hint {
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    margin-top: 18px;
+    text-align: center;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+<form class="login-box" method="POST">
+  <h1>Misha Monitor</h1>
+  <div class="sub">Lab access &mdash; sign in</div>
+
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+
+  <label for="username">Username</label>
+  <input id="username" type="text" name="username" autocomplete="username" autofocus required>
+
+  <label for="password">Password</label>
+  <input id="password" type="password" name="password" autocomplete="current-password" required>
+
+  <button type="submit">Sign in</button>
+
+  <div class="hint">Ask the admin to create your account.</div>
+</form>
+</body>
+</html>

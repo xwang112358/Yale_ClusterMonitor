@@ -1,0 +1,44 @@
+# /etc/systemd/system/misha-monitor-tunnel.service   (on the Yale-network host)
+#
+# Holds open a reverse SSH tunnel from the Yale host to the DigitalOcean
+# droplet, publishing the local Flask port (127.0.0.1:5111) as the
+# droplet's loopback port (127.0.0.1:5111). Caddy on the droplet
+# reverse-proxies that loopback port for HTTPS.
+#
+# Replace:
+#   - REPLACE_ME_USERNAME with the local user that owns the SSH key
+#   - 137.184.145.140 with your droplet's IP (or hostname)
+#   - the key path if different
+#
+# The droplet's sshd_config should have `GatewayPorts no` (the default)
+# so the published port is bound to the droplet's loopback only — never
+# directly exposed to the public internet.
+#
+# Install:
+#   sudo apt install -y autossh
+#   sudo cp deploy/misha-monitor-tunnel.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now misha-monitor-tunnel.service
+
+[Unit]
+Description=Reverse SSH tunnel: Yale host -> DigitalOcean droplet (Misha monitor)
+After=network-online.target misha-monitor.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=REPLACE_ME_USERNAME
+Environment="AUTOSSH_GATETIME=0"
+ExecStart=/usr/bin/autossh -M 0 -N -T \
+    -o ExitOnForwardFailure=yes \
+    -o ServerAliveInterval=30 \
+    -o ServerAliveCountMax=3 \
+    -o StrictHostKeyChecking=accept-new \
+    -i /home/REPLACE_ME_USERNAME/.ssh/id_ed25519_misha_do \
+    -R 127.0.0.1:5111:127.0.0.1:5111 \
+    tunnel@137.184.145.140
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

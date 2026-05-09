@@ -1,0 +1,30 @@
+# /etc/caddy/Caddyfile  (on the DigitalOcean droplet)
+#
+# Replace misha.example.com with your DNS name. Caddy will provision a
+# Let's Encrypt cert automatically. The reverse_proxy target is the
+# loopback port published by the autossh tunnel from the Yale host.
+#
+# Reload after edits:  sudo systemctl reload caddy
+
+misha.example.com {
+    encode zstd gzip
+
+    # Long polling / websocket-friendly timeouts (cheap insurance).
+    reverse_proxy 127.0.0.1:5111 {
+        transport http {
+            read_timeout 60s
+            write_timeout 60s
+        }
+    }
+
+    log {
+        output file /var/log/caddy/misha-monitor.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+        format console
+    }
+
+    # Optional: deny everything unless the tunnel is up. If the upstream
+    # is unreachable Caddy returns 502 by default — that's fine.
+}

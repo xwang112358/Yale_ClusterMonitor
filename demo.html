@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Misha Monitor — DEMO</title>
+<link rel="icon" type="image/png" href="static/img/favicon.png">
+<style>
+  :root {
+    --bg: #0f1117;
+    --card: #1a1d27;
+    --card-soft: #20232f;
+    --card-border: #2a2d3a;
+    --text: #e0e0e0;
+    --text-dim: #888;
+    --accent: #6c8cff;
+    --green: #4caf50;
+    --green-deep: #2e7d32;
+    --green-soft: #388e3c;
+    --yellow: #ff9800;
+    --red: #f44336;
+    --bar-bg: #2a2d3a;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    background: var(--bg); color: var(--text);
+    padding: 20px; min-height: 100vh;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 22px; padding-bottom: 14px;
+    border-bottom: 1px solid var(--card-border); gap: 16px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 1.2rem; font-weight: 600; letter-spacing: 0.5px; }
+  header h1 .host { color: var(--text-dim); font-weight: 400; font-size: 0.85rem; margin-left: 8px; }
+  header h1 .demo-tag {
+    background: rgba(255, 152, 0, 0.18); color: var(--yellow);
+    padding: 2px 8px; border-radius: 4px; font-size: 0.66rem;
+    letter-spacing: 1px; margin-left: 10px; vertical-align: middle;
+  }
+
+  .header-right { display: flex; gap: 14px; align-items: center; font-size: 0.78rem; color: var(--text-dim); }
+  .header-right .who { color: var(--text); }
+  #status .dot {
+    display: inline-block; width: 8px; height: 8px;
+    border-radius: 50%; background: var(--green); margin-right: 6px;
+    animation: pulse 2s infinite;
+  }
+  #status.stale .dot { background: var(--yellow); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  button.btn {
+    background: none; border: 1px solid var(--card-border); color: var(--text-dim);
+    padding: 4px 12px; border-radius: 4px; cursor: pointer;
+    font-family: inherit; font-size: 0.75rem;
+    transition: border-color 0.2s, color 0.2s;
+  }
+  button.btn:hover { border-color: var(--accent); color: var(--accent); }
+  button.btn.spinning { pointer-events: none; opacity: 0.5; }
+
+  .section-title {
+    font-size: 0.72rem; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 1.2px;
+    margin: 18px 0 10px;
+    display: flex; align-items: baseline; justify-content: space-between;
+  }
+  .section-title .meta { font-size: 0.7rem; color: var(--text-dim); text-transform: none; letter-spacing: 0.4px; }
+
+  .gpu-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .gpu-chip { background: var(--card); border: 1px solid var(--card-border); border-radius: 8px; padding: 10px 12px; }
+  .gpu-chip .gtype { font-size: 0.78rem; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 1px; }
+  .gpu-chip .gnum { font-size: 0.95rem; margin: 2px 0 6px; }
+  .gpu-chip .gnum .free { color: var(--green); font-weight: 600; }
+  .gpu-chip .gsub { font-size: 0.65rem; color: var(--text-dim); margin-top: 4px; }
+
+  .bar-wrap { height: 6px; background: var(--bar-bg); border-radius: 3px; overflow: hidden; width: 100%; }
+  .bar-fill { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
+  .fill-low  { background: var(--green); }
+  .fill-mid  { background: var(--yellow); }
+  .fill-high { background: var(--red); }
+
+  .node-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+  .node-card {
+    background: var(--card); border: 1px solid var(--card-border); border-radius: 6px;
+    overflow: hidden; cursor: pointer; transition: transform 0.1s, border-color 0.2s;
+    display: flex; flex-direction: column;
+  }
+  .node-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+  .node-row {
+    padding: 6px 8px; text-align: center; font-size: 0.72rem;
+    border-top: 1px solid rgba(0,0,0,0.25); color: #fff;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .node-row:first-child { border-top: 0; font-weight: 600; }
+  .node-row.idle    { background: #ffffff; color: #222; }
+  .node-row.low     { background: #c8e6c9; color: #1b3a1c; }
+  .node-row.mid     { background: var(--green-soft); color: #fff; }
+  .node-row.high    { background: var(--green-deep); color: #fff; }
+  .node-row.full    { background: #1b5e20; color: #fff; }
+  .node-row.gpu-label { background: #2e7d32; color: #fff; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; font-size: 0.66rem; }
+  .node-row.gpu-label.gpu-h100 { background: #2563eb; }
+  .node-row.gpu-label.gpu-h200 { background: #7c3aed; }
+  .node-row.gpu-label.gpu-l40s { background: #0d9488; }
+  .node-row.gpu-label.gpu-a40  { background: #ea580c; }
+  .node-row.gpu-label.gpu-a100 { background: #16a34a; }
+  .node-row.gpu-label.gpu-cpu  { background: #475569; }
+  .node-card.has-h100 { box-shadow: inset 4px 0 0 #2563eb; }
+  .node-card.has-h200 { box-shadow: inset 4px 0 0 #7c3aed; }
+  .node-card.has-l40s { box-shadow: inset 4px 0 0 #0d9488; }
+  .node-card.has-a40  { box-shadow: inset 4px 0 0 #ea580c; }
+  .node-card.has-a100 { box-shadow: inset 4px 0 0 #16a34a; }
+  .node-row.unhealthy { background: #5e2a2a; color: #fff; }
+  .partition-block { margin-bottom: 18px; }
+  .partition-head {
+    display: flex; align-items: baseline; gap: 12px;
+    padding: 8px 12px; background: var(--card-soft);
+    border: 1px solid var(--card-border); border-radius: 6px 6px 0 0;
+    border-bottom: 0; font-size: 0.78rem; font-weight: 600;
+  }
+  .partition-head .pname { color: var(--accent); text-transform: lowercase; letter-spacing: 1px; }
+  .partition-head .pmeta { color: var(--text-dim); font-size: 0.7rem; font-weight: 400; margin-left: auto; }
+  .gtype-group { padding: 10px 12px; border: 1px solid var(--card-border); border-top: 0; background: rgba(255,255,255,0.01); }
+  .gtype-group + .gtype-group { border-top: 1px solid var(--card-border); }
+  .gtype-group:last-child { border-radius: 0 0 6px 6px; }
+  .gtype-head {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 8px; font-size: 0.7rem; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 1.4px;
+  }
+  .gtype-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .gtype-swatch.h100 { background: #2563eb; }
+  .gtype-swatch.h200 { background: #7c3aed; }
+  .gtype-swatch.l40s { background: #0d9488; }
+  .gtype-swatch.a40  { background: #ea580c; }
+  .gtype-swatch.a100 { background: #16a34a; }
+  .gtype-swatch.cpu  { background: #475569; }
+  .gtype-head .ghdr-meta { color: var(--text-dim); font-size: 0.65rem; letter-spacing: 0.6px; margin-left: auto; }
+  .partition-pill {
+    display: inline-block; background: var(--card-soft); color: var(--text-dim);
+    border: 1px solid var(--card-border); border-radius: 8px;
+    padding: 1px 6px; font-size: 0.6rem; margin-right: 4px;
+    text-transform: lowercase; letter-spacing: 0.8px;
+  }
+  .node-foot { background: var(--card-soft); color: var(--accent); text-align: center; font-size: 0.62rem; padding: 4px 6px; letter-spacing: 0.6px; border-top: 1px solid var(--card-border); }
+
+  .panel { background: var(--card); border: 1px solid var(--card-border); border-radius: 8px; overflow: hidden; }
+  .panel-head {
+    padding: 10px 14px; font-size: 0.75rem; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 1px;
+    border-bottom: 1px solid var(--card-border);
+    display: flex; justify-content: space-between;
+  }
+  table.jobs { width: 100%; border-collapse: collapse; font-size: 0.74rem; }
+  table.jobs th, table.jobs td {
+    padding: 6px 12px; text-align: left;
+    border-bottom: 1px solid var(--card-border);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px;
+  }
+  table.jobs th { color: var(--text-dim); font-weight: 500; font-size: 0.66rem; text-transform: uppercase; letter-spacing: 1px; }
+  table.jobs tr:hover td { background: rgba(255,255,255,0.025); }
+  table.jobs td.num { font-variant-numeric: tabular-nums; }
+  table.jobs td .reason { color: var(--text-dim); }
+  a.user-link { color: var(--text); text-decoration: none; border-bottom: 1px dotted var(--card-border); }
+  a.user-link:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  a.user-link.user-mine { color: var(--accent); font-weight: 600; }
+  .pill { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 0.62rem; background: rgba(108,140,255,0.15); color: var(--accent); text-transform: uppercase; letter-spacing: 0.6px; }
+  .pill.pd { background: rgba(255,152,0,0.15); color: var(--yellow); }
+  .pill.r  { background: rgba(76,175,80,0.15); color: var(--green); }
+  .empty { padding: 18px 14px; color: var(--text-dim); font-size: 0.78rem; text-align: center; }
+
+  #modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; z-index: 1000; padding: 24px; }
+  #modal.visible { display: flex; }
+  .modal-box { background: var(--card); border: 1px solid var(--card-border); border-radius: 10px; padding: 18px 22px; max-width: 720px; width: 100%; max-height: 80vh; overflow-y: auto; }
+  .modal-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+  .modal-head h2 { font-size: 1rem; font-weight: 600; }
+  .modal-head .meta { color: var(--text-dim); font-size: 0.74rem; }
+  .modal-close { cursor: pointer; color: var(--text-dim); background: none; border: 0; font-size: 1.1rem; padding: 0 4px; }
+
+  .footer { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--card-border); color: var(--text-dim); font-size: 0.7rem; display: flex; justify-content: space-between; }
+  .demo-banner {
+    background: rgba(255, 152, 0, 0.08);
+    border: 1px solid rgba(255, 152, 0, 0.4);
+    color: var(--yellow);
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    margin-bottom: 14px;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Misha Monitor<span class="host">misha.ycrc.yale.edu &middot; gpu,gpu_devel</span><span class="demo-tag">DEMO</span></h1>
+  <div class="header-right">
+    <span class="who">Alice (demo)</span>
+    <button class="btn" onclick="fetchData()" id="refresh-btn">Refresh</button>
+    <span id="status"><span class="dot"></span><span id="status-text">Loading&hellip;</span></span>
+  </div>
+</header>
+
+<div class="demo-banner">
+  This is a static preview with mock data — no SSH, no Misha, no auth. Click any node to see its jobs.
+  All "free in X" timers are computed from your local clock.
+</div>
+
+<div class="section-title">GPU Availability <span class="meta" id="gpu-summary-meta"></span></div>
+<div class="gpu-summary" id="gpu-summary"></div>
+
+<div class="section-title">Nodes <span class="meta" id="nodes-meta"></span></div>
+<div id="node-grid"></div>
+
+<div class="section-title">Lab Queue <span class="meta">account: qingyu_pi</span></div>
+<div class="panel" id="lab-panel">
+  <div class="panel-head"><span>Running &amp; pending jobs</span><span id="lab-counts"></span></div>
+  <div id="lab-body"><div class="empty">Loading&hellip;</div></div>
+</div>
+
+<div class="section-title">GPU Occupancy <span class="meta">cluster-wide &middot; click a user to email</span></div>
+<div class="panel" id="users-panel">
+  <div class="panel-head"><span>Who is holding cards right now</span><span id="users-counts"></span></div>
+  <div id="users-body"><div class="empty">Loading&hellip;</div></div>
+</div>
+
+<div class="footer">
+  <span id="footer-left">&mdash;</span>
+  <span>Refresh every 30s</span>
+</div>
+
+<div id="modal" onclick="if(event.target.id==='modal')hideModal()">
+  <div class="modal-box">
+    <div class="modal-head">
+      <div>
+        <h2 id="modal-title">Node</h2>
+        <div class="meta" id="modal-sub"></div>
+      </div>
+      <button class="modal-close" onclick="hideModal()">&times;</button>
+    </div>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<script>
+const ME = 'alice';
+let LAB_NETIDS = ['alice','bob','carol'];
+let EMAIL_DOMAIN = 'yale.edu';
+let LAST = null;
+
+// ---------- Mock data generator ----------
+function tIso(hoursFromNow, minutesFromNow = 0) {
+  const d = new Date(Date.now() + hoursFromNow * 3600000 + minutesFromNow * 60000);
+  // SLURM-style "YYYY-MM-DDTHH:MM:SS" (local-ish — Date.toISOString gives UTC; we don't care for demo)
+  return d.toISOString().slice(0, 19);
+}
+function used(hoursAgo) {
+  const m = Math.round(hoursAgo * 60);
+  const h = Math.floor(m / 60), mm = m % 60;
+  return `${h}:${String(mm).padStart(2,'0')}:00`;
+}
+function tlim(hours) {
+  if (hours >= 24) return `${Math.floor(hours/24)}-${String(hours%24).padStart(2,'0')}:00:00`;
+  return `${String(hours).padStart(2,'0')}:00:00`;
+}
+
+// Hardware roster. Each entry: [host, gpu_type, gpus_per_node, cpus, mem_gb, partitions]
+const NODE_TEMPLATES = [
+  // h100 — gpu partition only
+  ['r817u03n07','h100',4,48,1000, ['gpu']], ['r817u09n07','h100',4,48,1000, ['gpu']],
+  ['r817u15n05','h100',4,48,1000, ['gpu']], ['r817u15n06','h100',4,48,1000, ['gpu']],
+  ['r817u23n05','h100',4,48,1000, ['gpu']], ['r817u23n06','h100',4,48,1000, ['gpu']],
+  ['r817u29n05','h100',4,48,1000, ['gpu']], ['r817u35n05','h100',4,48,1000, ['gpu']],
+  ['r4507u05n01','h100',4,48,1000, ['gpu']], ['r4507u13n01','h100',4,48,1000, ['gpu']],
+  ['r4516u08n01','h100',4,48,1000, ['gpu']], ['r4516u16n01','h100',4,48,1000, ['gpu']],
+  // h200
+  ['r818u29n04','h200',4,48,1000, ['gpu']], ['r818u33n04','h200',4,48,1000, ['gpu']],
+  ['r818u33n06','h200',4,48,1000, ['gpu']], ['r818u33n08','h200',4,48,1000, ['gpu']],
+  // l40s
+  ['r4513u10n01','l40s',4,48,1000, ['gpu']], ['r4513u20n01','l40s',4,48,1000, ['gpu']],
+  ['r4513u30n01','l40s',4,48,1000, ['gpu']],
+  // a40 — note: a40 nodes belong to BOTH gpu and gpu_devel
+  ['r4516u01n01','a40',4,48,1000, ['gpu']], ['r4518u01n01','a40',4,48,1000, ['gpu']],
+  ['r4518u09n01','a40',4,48,1000, ['gpu_devel','gpu']], ['r4516u24n01','a40',4,48,1000, ['gpu_devel','gpu']],
+  // a100
+  ['r4519u01n01','a100',4,32,1000, ['gpu']], ['r4519u04n01','a100',4,32,1000, ['gpu']],
+  ['r4519u07n01','a100',4,32,1000, ['gpu']], ['r4519u10n01','a100',4,32,1000, ['gpu']],
+  ['r4519u13n01','a100',4,32,1000, ['gpu']], ['r4519u16n01','a100',4,32,1000, ['gpu']],
+  // bigmem (cpu-only) — show that the dashboard handles non-GPU partitions too
+  ['r4520u01n01',null,0,128,2000, ['bigmem']], ['r4520u05n01',null,0,128,2000, ['bigmem']],
+];
+
+// Jobs. Each: [host, jobid, user, account, gpus, cpus, memGB, hoursUsed, hoursLimit, name]
+// We'll let some end soon for the "free in X" timer to look interesting.
+const JOBS = [
+  // h100 — heavy use
+  ['r817u03n07','12345678','alice','qingyu_pi',  4, 35, 384, 3.4, 24, 'train_llm_1.3B'],
+  ['r817u09n07','12345689','jpark09','vision_lab',4, 36, 320, 6.8, 48, 'diffusion_finetune'],
+  ['r817u15n05','12345700','dchen42','genomics',  3, 42, 805, 11.2, 72, 'protein_fold'],
+  ['r817u15n06','12345701','dchen42','genomics',  3, 18, 160, 11.2, 72, 'protein_fold'],
+  ['r817u23n05','12345712','klee03','wutsai',     4, 28, 288, 0.5, 4, 'interactive_train'],
+  ['r817u23n06','12345722','svogel','wutsai',     4,  7, 576, 18.5, 24, 'multinode_pretrain'],
+  ['r817u29n05','12345731','svogel','wutsai',     4, 27, 480, 18.5, 24, 'multinode_pretrain'],
+  ['r817u35n05','12345740','bob','qingyu_pi',     4, 11, 504, 1.2, 8, 'eval_sweep'],
+  ['r4507u05n01','12345750','mlin22','speech',    3, 33, 288, 4.0, 24, 'whisper_v3_finetune'],
+  ['r4507u13n01','12345751','mlin22','speech',    2, 24, 485, 4.0, 24, 'whisper_v3_finetune'],
+  ['r4516u08n01','12345760','tking11','vision_lab',4, 21, 472, 9.0, 12, 'detr_train'],
+  ['r4516u16n01','12345761','tking11','vision_lab',4, 26, 504, 9.0, 12, 'detr_train'],
+  // h200 — fully booked
+  ['r818u29n04','12345770','svogel','wutsai',     4, 48, 900, 23.5, 24, 'multinode_pretrain'],
+  ['r818u33n04','12345780','rhuang','genomics',   4, 18, 128, 0.3, 6, 'salloc_interactive'],
+  ['r818u33n06','12345790','rhuang','genomics',   4, 48, 900, 0.5, 6, 'genome_align'],
+  ['r818u33n08','12345800','jpark09','vision_lab',4, 18, 128, 6.8, 48, 'diffusion_finetune'],
+  // l40s — mixed
+  ['r4513u10n01','12345810','carol','qingyu_pi',  4, 16, 192, 0.8, 4, 'rl_eval'],
+  ['r4513u20n01','12345820','wfan09','speech',    3, 24,  48, 14.0, 48, 'asr_pretrain'],
+  ['r4513u30n01','12345830','wfan09','speech',    2, 16,  32, 14.0, 48, 'asr_pretrain'],
+  // a40 — partial
+  ['r4516u01n01','12345840','etan','wutsai',      4, 25, 148, 5.5, 12, 'gnn_search'],
+  ['r4518u01n01','12345850','etan','wutsai',      4, 32,  64, 5.5, 12, 'gnn_search'],
+  ['r4518u09n01','12345851','etan','wutsai',      2, 16,  32, 5.5, 12, 'gnn_search'],
+  // a100 — varied (this is the "free in" demo set)
+  ['r4519u01n01','12345860','npatel','wutsai',    2,  5, 930, 11.5, 12, 'long_run_dft'],
+  ['r4519u04n01','12345870','npatel','wutsai',    3, 20, 140, 11.5, 12, 'long_run_dft'],
+  // r4519u07n01 stays IDLE
+  ['r4519u10n01','12345880','klee03','wutsai',    3, 10,  64, 0.4, 6, 'salloc_interactive'],
+  ['r4519u13n01','12345890','jpark09','vision_lab',3, 10,  64, 0.4, 4, 'eval_run'],
+  ['r4519u16n01','12345900','bob','qingyu_pi',    1,  4, 900, 7.5, 8, 'cnn_finetune'],
+];
+
+// Build the JSON shape app.py emits
+function buildMock() {
+  // Aggregate jobs onto nodes
+  const jobsByHost = {};
+  const allJobs = [];
+  for (const [host, jobid, user, account, gpus, cpus, memGB, used_h, lim_h, name] of JOBS) {
+    const job = {
+      jobid, user, account,
+      time_used: used(used_h),
+      time_limit: tlim(lim_h),
+      time_left: tlim(Math.max(0, lim_h - used_h)),
+      end_time: tIso(lim_h - used_h),
+      cpus, mem_mb: memGB * 1024, gpus,
+      gpu_type: NODE_TEMPLATES.find(n => n[0] === host)?.[1] || null,
+      name, nodelist: host, state: 'R',
+    };
+    (jobsByHost[host] ||= []).push(job);
+    allJobs.push(job);
+  }
+
+  // Build nodes
+  const nodes = NODE_TEMPLATES.map(([host, gtype, gtotal, ctotal, mem_gb, partitions]) => {
+    const jobs = jobsByHost[host] || [];
+    const gpu_alloc = jobs.reduce((a, j) => a + j.gpus, 0);
+    const cpu_alloc = jobs.reduce((a, j) => a + j.cpus, 0);
+    const mem_alloc_mb = jobs.reduce((a, j) => a + j.mem_mb, 0);
+    let state = jobs.length === 0 ? 'idle' : (gtotal > 0 && gpu_alloc >= gtotal ? 'allocated' : 'mixed');
+    if (host === 'r4519u04n01') state = 'mixed';
+    if (host === 'r4516u24n01') { state = 'drain'; }
+    const gpu_ends = jobs.filter(j => j.gpus > 0 && j.end_time).map(j => j.end_time);
+    return {
+      host, partitions, gpu_type: gtype,
+      gpu_total: gtotal, gpu_alloc,
+      cpu_total: ctotal, cpu_alloc,
+      mem_total_mb: mem_gb * 1024, mem_alloc_mb,
+      state, jobs,
+      next_gpu_free_at: gpu_ends.length ? gpu_ends.reduce((a,b) => a < b ? a : b) : null,
+    };
+  });
+
+  // Per-GPU-type summary
+  const sumByType = {};
+  for (const n of nodes) {
+    if (!n.gpu_type) continue;
+    const d = (sumByType[n.gpu_type] ||= {type: n.gpu_type, total: 0, alloc: 0, nodes_total: 0, nodes_with_free: 0, soonest_free_at: null});
+    d.total += n.gpu_total;
+    d.alloc += n.gpu_alloc;
+    d.nodes_total += 1;
+    if (n.gpu_alloc < n.gpu_total && !['drain','down','maint'].includes(n.state)) d.nodes_with_free += 1;
+    if (n.gpu_alloc >= n.gpu_total && n.next_gpu_free_at) {
+      if (!d.soonest_free_at || n.next_gpu_free_at < d.soonest_free_at) d.soonest_free_at = n.next_gpu_free_at;
+    }
+  }
+  const gpu_summary = Object.values(sumByType).sort((a,b) => a.type.localeCompare(b.type));
+
+  // Per-user occupancy
+  const userMap = {};
+  for (const j of allJobs) {
+    if (j.gpus <= 0) continue;
+    const u = (userMap[j.user] ||= {user: j.user, accounts: new Set(), jobs: 0, gpus: 0, gpu_types: new Set(), nodes: new Set(), soonest_end: null});
+    u.accounts.add(j.account);
+    u.jobs += 1;
+    u.gpus += j.gpus;
+    if (j.gpu_type) u.gpu_types.add(j.gpu_type);
+    u.nodes.add(j.nodelist);
+    if (j.end_time && (!u.soonest_end || j.end_time < u.soonest_end)) u.soonest_end = j.end_time;
+  }
+  const gpu_users = Object.values(userMap).map(u => ({
+    user: u.user, accounts: [...u.accounts].sort(),
+    jobs: u.jobs, gpus: u.gpus,
+    gpu_types: [...u.gpu_types].sort(),
+    nodes: [...u.nodes].sort(),
+    soonest_end: u.soonest_end,
+  })).sort((a,b) => b.gpus - a.gpus);
+
+  const lab_running = allJobs.filter(j => j.account === 'qingyu_pi');
+  const lab_pending = [
+    {jobid:'12399001', user:'alice', account:'qingyu_pi',
+     partition:'gpu', reason:'Resources',
+     time_limit: tlim(24), start_time: tIso(0, 47),
+     cpus: 16, mem_mb: 256*1024, gpus: 4, gpu_type: 'h200',
+     name:'big_pretrain_v2', state:'PD'},
+    {jobid:'12399002', user:'bob', account:'qingyu_pi',
+     partition:'gpu', reason:'Priority',
+     time_limit: tlim(8), start_time: tIso(2, 15),
+     cpus: 8, mem_mb: 64*1024, gpus: 1, gpu_type: 'a100',
+     name:'cnn_eval_sweep', state:'PD'},
+  ];
+
+  return {
+    generated_at: Date.now() / 1000,
+    partitions: ['gpu','gpu_devel'],
+    nodes, gpu_summary,
+    running_jobs_total: allJobs.length,
+    pending_jobs_total: lab_pending.length + 14, // pretend others queued cluster-wide
+    lab_running, lab_pending,
+    lab_account: 'qingyu_pi', lab_netids: LAB_NETIDS,
+    gpu_users, email_domain: EMAIL_DOMAIN,
+  };
+}
+
+// ---------- Render helpers (same as production, minus the auth fetch) ----------
+function fmtMem(mb) {
+  if (!mb) return '0G';
+  if (mb >= 1024) return Math.round(mb / 1024) + 'G';
+  return mb + 'M';
+}
+function pct(a, t) { return t > 0 ? (a / t) * 100 : 0; }
+function parseSlurmTime(s) { if (!s || s === 'N/A' || s === 'Unknown') return null; const d = new Date(s); return isNaN(d.getTime()) ? null : d; }
+function fmtRelative(s) {
+  const d = parseSlurmTime(s); if (!d) return null;
+  let secs = Math.round((d.getTime() - Date.now()) / 1000);
+  if (secs < 0) return 'overdue';
+  if (secs < 60) return secs + 's';
+  const m = Math.floor(secs/60); if (m < 60) return m + 'm';
+  const h = Math.floor(m/60); const mm = m%60; if (h < 24) return h + 'h' + (mm? mm+'m':'');
+  const dd = Math.floor(h/24); const hh = h%24; return dd + 'd' + (hh? hh+'h':'');
+}
+function fmtAbsolute(s) { const d = parseSlurmTime(s); if (!d) return null; return d.toLocaleString(undefined, {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}); }
+function nodeRowClass(p, state) {
+  if (['down','drain','drained','maint','fail','unknown'].includes(state)) return 'unhealthy';
+  if (p === 0) return 'idle';
+  if (p < 35) return 'low';
+  if (p < 70) return 'mid';
+  if (p < 100) return 'high';
+  return 'full';
+}
+function fillClass(p) { return p < 60 ? 'fill-low' : p < 90 ? 'fill-mid' : 'fill-high'; }
+function setStatus(state, text) {
+  const el = document.getElementById('status');
+  el.classList.remove('stale','error');
+  if (state) el.classList.add(state);
+  document.getElementById('status-text').textContent = text;
+}
+function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function escapeAttr(s) { return escapeHtml(s); }
+function isMine(u) { return u === ME || LAB_NETIDS.includes(u); }
+function userLink(u) {
+  const safe = escapeHtml(u);
+  return `<a class="user-link ${isMine(u) ? 'user-mine' : ''}" href="mailto:${safe}@${EMAIL_DOMAIN}" title="Email ${safe}@${EMAIL_DOMAIN}">${safe}</a>`;
+}
+
+function renderGpuSummary(summary) {
+  const wrap = document.getElementById('gpu-summary');
+  let totalAlloc = 0, totalAll = 0;
+  wrap.innerHTML = summary.map(s => {
+    const free = s.total - s.alloc;
+    totalAlloc += s.alloc; totalAll += s.total;
+    const p = pct(s.alloc, s.total);
+    const soonest = (free === 0 && s.soonest_free_at)
+      ? `<div class="gsub" style="color:var(--accent);">next free in ${fmtRelative(s.soonest_free_at) || '?'}</div>` : '';
+    return `<div class="gpu-chip">
+      <div class="gtype">${s.type}</div>
+      <div class="gnum"><span class="free">${free}</span> free <span style="color:var(--text-dim);">/ ${s.total}</span></div>
+      <div class="bar-wrap"><div class="bar-fill ${fillClass(p)}" style="width:${p.toFixed(1)}%"></div></div>
+      <div class="gsub">${s.alloc} alloc · ${s.nodes_with_free}/${s.nodes_total} nodes have free GPUs</div>
+      ${soonest}
+    </div>`;
+  }).join('');
+  document.getElementById('gpu-summary-meta').textContent = `${totalAll - totalAlloc} GPUs free / ${totalAll} total`;
+}
+
+function nodeCardHtml(n, i) {
+  const cpuP = pct(n.cpu_alloc, n.cpu_total);
+  const memP = pct(n.mem_alloc_mb, n.mem_total_mb);
+  const gpuP = pct(n.gpu_alloc, n.gpu_total || 1);
+  const headClass = nodeRowClass(Math.max(cpuP, memP, gpuP), n.state);
+  const freeIn = (n.gpu_alloc > 0 && n.next_gpu_free_at) ? fmtRelative(n.next_gpu_free_at) : null;
+  const freeFooter = freeIn ? `<div class="node-foot" title="Earliest GPU job end on this node">≤ ${freeIn}</div>` : '';
+  const gtype = (n.gpu_type || 'cpu').toLowerCase();
+  return `<div class="node-card has-${gtype}" onclick="showNode(${i})">
+    <div class="node-row ${headClass}">${n.host}</div>
+    <div class="node-row ${nodeRowClass(cpuP, n.state)}">${n.cpu_alloc}/${n.cpu_total}</div>
+    <div class="node-row ${nodeRowClass(memP, n.state)}">${fmtMem(n.mem_alloc_mb)}/${fmtMem(n.mem_total_mb)}</div>
+    <div class="node-row gpu-label gpu-${gtype}">${gtype}</div>
+    <div class="node-row ${nodeRowClass(gpuP, n.state)}">${n.gpu_alloc}/${n.gpu_total}</div>
+    ${freeFooter}
+  </div>`;
+}
+
+const PART_ORDER = {gpu: 0, gpu_devel: 1, bigmem: 2, day: 3, devel: 4, week: 5};
+
+function renderNodes(nodes) {
+  const wrap = document.getElementById('node-grid');
+  if (!nodes.length) { wrap.innerHTML = '<div class="empty">No nodes returned.</div>'; return; }
+  const sorted = [...nodes].sort((a,b) => a.host.localeCompare(b.host));
+  const byPart = {};
+  sorted.forEach((n, i) => {
+    const p = (n.partitions && n.partitions[0]) || 'unknown';
+    const gt = (n.gpu_type || 'cpu').toLowerCase();
+    ((byPart[p] = byPart[p] || {})[gt] = byPart[p][gt] || []).push({n, i});
+  });
+  const partitions = Object.keys(byPart).sort((a,b) =>
+    (PART_ORDER[a] ?? 99) - (PART_ORDER[b] ?? 99) || a.localeCompare(b));
+  let html = '';
+  for (const part of partitions) {
+    const types = Object.keys(byPart[part]).sort();
+    let nodeCount = 0, gpuTotal = 0, gpuFree = 0;
+    for (const t of types) for (const {n} of byPart[part][t]) {
+      nodeCount++; gpuTotal += n.gpu_total; gpuFree += (n.gpu_total - n.gpu_alloc);
+    }
+    const partMeta = gpuTotal > 0
+      ? `${nodeCount} node${nodeCount===1?'':'s'} · ${gpuFree}/${gpuTotal} GPUs free`
+      : `${nodeCount} node${nodeCount===1?'':'s'}`;
+    html += `<div class="partition-block">
+      <div class="partition-head">
+        <span class="pname">${escapeHtml(part)}</span>
+        <span class="pmeta">${partMeta}</span>
+      </div>`;
+    for (const t of types) {
+      const tnodes = byPart[part][t];
+      let tFree = 0, tTotal = 0;
+      tnodes.forEach(({n}) => { tFree += (n.gpu_total - n.gpu_alloc); tTotal += n.gpu_total; });
+      const tHdr = tTotal > 0
+        ? `${tnodes.length} node${tnodes.length===1?'':'s'} · ${tFree}/${tTotal} free`
+        : `${tnodes.length} node${tnodes.length===1?'':'s'} (no GPUs)`;
+      html += `<div class="gtype-group">
+        <div class="gtype-head">
+          <span class="gtype-swatch ${t}"></span>
+          <span>${escapeHtml(t)}</span>
+          <span class="ghdr-meta">${tHdr}</span>
+        </div>
+        <div class="node-grid">${tnodes.map(({n, i}) => nodeCardHtml(n, i)).join('')}</div>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+  wrap.innerHTML = html;
+  document.getElementById('nodes-meta').textContent =
+    `${nodes.length} nodes · grouped by partition / GPU type · numbers are SLURM allocations, not real utilization`;
+}
+
+function showNode(idx) {
+  const n = LAST.nodes_sorted[idx]; if (!n) return;
+  const cpuP = pct(n.cpu_alloc, n.cpu_total);
+  const memP = pct(n.mem_alloc_mb, n.mem_total_mb);
+  const gpuP = pct(n.gpu_alloc, n.gpu_total || 1);
+  document.getElementById('modal-title').textContent = n.host;
+  const partPills = (n.partitions || []).map(p => `<span class="partition-pill">${escapeHtml(p)}</span>`).join('');
+  document.getElementById('modal-sub').innerHTML =
+    `${partPills} ${escapeHtml(n.gpu_type || 'cpu-only')} · state: ${escapeHtml(n.state)} · ` +
+    `CPU ${n.cpu_alloc}/${n.cpu_total} alloc (${cpuP.toFixed(0)}%) · ` +
+    `RAM ${fmtMem(n.mem_alloc_mb)}/${fmtMem(n.mem_total_mb)} alloc (${memP.toFixed(0)}%) · ` +
+    `GPU ${n.gpu_alloc}/${n.gpu_total} alloc (${gpuP.toFixed(0)}%)`;
+  let body = '';
+  if (n.jobs && n.jobs.length) {
+    body = `<table class="jobs"><thead><tr>
+        <th>Job ID</th><th>User</th><th>Account</th><th>GPUs</th><th>CPUs</th><th>RAM</th>
+        <th>Used / Limit</th><th>Time Left</th><th>Ends</th><th>Name</th>
+      </tr></thead><tbody>` +
+      n.jobs.map(j => {
+        const rel = fmtRelative(j.end_time); const abs = fmtAbsolute(j.end_time);
+        return `<tr>
+          <td class="num">${j.jobid}</td>
+          <td>${userLink(j.user)}</td>
+          <td>${j.account}</td>
+          <td class="num">${j.gpus}${j.gpu_type? ' '+j.gpu_type:''}</td>
+          <td class="num">${j.cpus}</td>
+          <td class="num">${fmtMem(j.mem_mb)}</td>
+          <td class="num">${j.time_used} / ${j.time_limit}</td>
+          <td class="num">${rel || j.time_left || '-'}</td>
+          <td class="num" title="${escapeAttr(j.end_time||'')}">${abs || '-'}</td>
+          <td title="${escapeAttr(j.name)}">${escapeHtml(j.name)}</td>
+        </tr>`;
+      }).join('') + `</tbody></table>`;
+  } else {
+    body = `<div class="empty">No running jobs reported by SLURM on this node.</div>`;
+  }
+  document.getElementById('modal-body').innerHTML = body;
+  document.getElementById('modal').classList.add('visible');
+}
+function hideModal() { document.getElementById('modal').classList.remove('visible'); }
+
+function renderLab(running, pending) {
+  const body = document.getElementById('lab-body');
+  document.getElementById('lab-counts').textContent = `${running.length} running · ${pending.length} pending`;
+  if (!running.length && !pending.length) { body.innerHTML = '<div class="empty">No lab jobs in the queue.</div>'; return; }
+  const rows = [...running.map(j => ({...j, _state:'R'})), ...pending.map(j => ({...j, _state:'PD'}))];
+  body.innerHTML = `<table class="jobs"><thead><tr>
+      <th>State</th><th>Job ID</th><th>User</th><th>GPUs</th><th>CPUs</th><th>RAM</th>
+      <th>Used / Limit</th><th>Ends / Starts</th><th>Where</th><th>Name</th>
+    </tr></thead><tbody>` +
+    rows.map(j => {
+      const ends = j._state === 'R' ? (fmtRelative(j.end_time) || j.time_left || '-') : '';
+      const starts = j._state === 'PD' ? (fmtRelative(j.start_time) || '?') : '';
+      const tcell = j._state === 'R' ? ends : `≈ ${starts}`;
+      return `<tr>
+        <td><span class="pill ${j._state.toLowerCase()}">${j._state}</span></td>
+        <td class="num">${j.jobid}</td>
+        <td>${userLink(j.user)}</td>
+        <td class="num">${j.gpus}${j.gpu_type?' '+j.gpu_type:''}</td>
+        <td class="num">${j.cpus}</td>
+        <td class="num">${fmtMem(j.mem_mb)}</td>
+        <td class="num">${j.time_used || '-'} / ${j.time_limit}</td>
+        <td class="num">${tcell}</td>
+        <td>${j._state === 'R' ? escapeHtml(j.nodelist) : `<span class="reason">${escapeHtml(j.reason || j.partition || '')}</span>`}</td>
+        <td title="${escapeAttr(j.name)}">${escapeHtml(j.name)}</td>
+      </tr>`;
+    }).join('') + `</tbody></table>`;
+}
+
+function renderUsers(users) {
+  const body = document.getElementById('users-body');
+  if (!users.length) { body.innerHTML = '<div class="empty">No GPU jobs running.</div>'; return; }
+  body.innerHTML = `<table class="jobs"><thead><tr>
+      <th>User</th><th>Account</th><th>GPUs</th><th>Type</th><th>Jobs</th>
+      <th>Nodes</th><th>Soonest end</th>
+    </tr></thead><tbody>` +
+    users.map(u => {
+      const rel = fmtRelative(u.soonest_end); const abs = fmtAbsolute(u.soonest_end);
+      const endTxt = rel ? `${rel} <span style="color:var(--text-dim);">(${abs})</span>` : '-';
+      return `<tr>
+        <td>${userLink(u.user)}</td>
+        <td>${escapeHtml(u.accounts.join(', '))}</td>
+        <td class="num">${u.gpus}</td>
+        <td>${escapeHtml(u.gpu_types.join(', ') || '-')}</td>
+        <td class="num">${u.jobs}</td>
+        <td class="num" title="${escapeAttr(u.nodes.join(', '))}">${u.nodes.length}</td>
+        <td class="num">${endTxt}</td>
+      </tr>`;
+    }).join('') + `</tbody></table>`;
+  document.getElementById('users-counts').textContent =
+    `${users.length} users · ${users.reduce((a,u) => a + u.gpus, 0)} GPUs held`;
+}
+
+function setFooter(data) {
+  const el = document.getElementById('footer-left');
+  const ts = new Date(data.generated_at * 1000).toLocaleTimeString();
+  el.textContent = `Updated ${ts} · ${data.running_jobs_total} running · ${data.pending_jobs_total} pending cluster-wide`;
+}
+
+function fetchData() {
+  const btn = document.getElementById('refresh-btn');
+  btn.classList.add('spinning');
+  setTimeout(() => {
+    const data = buildMock();
+    LAST = data;
+    LAST.nodes_sorted = [...data.nodes].sort((a,b) => a.host.localeCompare(b.host));
+    setStatus('', 'live (demo)');
+    renderGpuSummary(data.gpu_summary);
+    renderNodes(data.nodes);
+    renderLab(data.lab_running, data.lab_pending);
+    renderUsers(data.gpu_users);
+    setFooter(data);
+    btn.classList.remove('spinning');
+  }, 200);
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideModal(); });
+fetchData();
+// In demo mode we don't auto-refresh; click the button to re-render.
+</script>
+</body>
+</html>

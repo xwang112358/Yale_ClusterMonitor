@@ -1,0 +1,9 @@
+{
+  "_comment": "Generate entries with:  python manage_users.py add <username>",
+  "_comment2": "Each entry: {username: {password: <pbkdf2_hash>, display: <full name>}}",
+
+  "alice": {
+    "password": "pbkdf2:sha256:600000$REPLACE_ME$REPLACE_ME",
+    "display": "Alice (example, replace this)"
+  }
+}

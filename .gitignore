@@ -7,3 +7,6 @@ __pycache__/
 .DS_Store
 nohup.out
 .claude/
+.flask_secret
+users.json
+
