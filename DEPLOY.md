@@ -3,6 +3,14 @@
 Fill in the blanks below as you go. Then work through the steps; each
 step references the values you've filled in.
 
+> **Companion docs:**
+> - [upgrade.md](upgrade.md) — day-to-day operations after deploy:
+>   add/remove users, change domain, rotate keys, update partitions,
+>   pull updates, re-deploy after a droplet rebuild.
+> - [deployment_history.md](deployment_history.md) — record of an
+>   actual deployment (values, outputs, deviations) — useful as a
+>   worked example.
+
 ---
 
 ## How it works
@@ -51,6 +59,13 @@ step references the values you've filled in.
 - Public hostname (DNS A record you'll point at it): `____________________`
 - SSH login user (root or your sudo user): `____________________`
 
+> Don't have a domain? Free option: register a subdomain at
+> [duckdns.org](https://www.duckdns.org) (sign in with GitHub/Google,
+> pick a name like `mishamonitor.duckdns.org`, point it at your droplet
+> IP). Caddy issues a real Let's Encrypt cert for it. No credit card.
+> Works with Caddy's TLS-ALPN-01 challenge — only port 443 needs to be
+> reachable.
+
 ### Yale Misha
 - Your netid: `____________________`
 - Your SLURM account (run `sacctmgr show user $USER format=Account` on Misha): `____________________`
@@ -83,14 +98,30 @@ sudo chown monitor:monitor /var/lib/monitor
 sudo chmod 755 /var/lib/monitor
 ```
 
-### Step D2 — Install the receive-only SSH command
+### Step D2 — Clone the repo + install the receive-only SSH command
+
+(Despite ordering, this combines the clone half of D4 with D2 — D2's
+files come from the clone, so we do them together.)
+
+Clone the repo as the `monitor` user:
 
 ```bash
-sudo cp /home/<your-droplet-user>/ClusterMonitor/deploy/monitor-receive.sh /usr/local/bin/
-sudo chmod 755 /usr/local/bin/monitor-receive.sh
+sudo -u monitor git clone https://github.com/<your-org>/Yale_ClusterMonitor.git \
+    /home/monitor/ClusterMonitor
 ```
 
-(If you haven't cloned the repo yet, do that first — see Step D4.)
+> If the repo is private, GitHub will reject password auth. Two options:
+> (a) make the repo public — its content is non-secret if you keep
+> `.env`, `users.json`, and `.flask_secret` gitignored (already so in
+> this repo), or (b) generate a deploy key on the droplet and add it to
+> the repo's Deploy keys page. See `upgrade.md` for the deploy-key flow.
+
+Install the receive script:
+
+```bash
+sudo cp /home/monitor/ClusterMonitor/deploy/monitor-receive.sh /usr/local/bin/
+sudo chmod 755 /usr/local/bin/monitor-receive.sh
+```
 
 Set up the `monitor` user's `authorized_keys` with the lockdown:
 
@@ -126,12 +157,14 @@ Wait until `dig +short <your hostname>` returns the droplet IP.
 
 ### Step D4 — Install the Flask app
 
+(Repo is already cloned from D2. Just create the venv and `.env` here.)
+
 ```bash
 sudo -u monitor bash -lc '
-  cd ~
-  git clone <this-repo-url> ClusterMonitor
-  cd ClusterMonitor
+  set -e
+  cd ~/ClusterMonitor
   python3 -m venv .venv
+  .venv/bin/pip install --upgrade pip
   .venv/bin/pip install -r requirements.txt
   cp .env.example .env
   chmod 600 .env
@@ -164,25 +197,55 @@ sudo -u monitor bash -lc '
 
 ### Step D5 — Flask service
 
+Render the unit through `sed | >` instead of `sed -i` so the cloned
+repo file isn't dirtied (future `git pull` stays clean).
+
 ```bash
-sudo sed -i 's/REPLACE_ME_USERNAME/monitor/g' \
-    /home/monitor/ClusterMonitor/deploy/misha-monitor.service
-sudo cp /home/monitor/ClusterMonitor/deploy/misha-monitor.service /etc/systemd/system/
+sudo sed 's/REPLACE_ME_USERNAME/monitor/g' \
+    /home/monitor/ClusterMonitor/deploy/misha-monitor.service \
+    > /etc/systemd/system/misha-monitor.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now misha-monitor.service
-sudo systemctl status misha-monitor.service     # should be 'active (running)'
+sudo systemctl status misha-monitor.service --no-pager     # should be 'active (running)'
+```
+
+Sanity-check it's listening:
+
+```bash
+ss -tlnp | grep 5111             # gunicorn LISTEN on 127.0.0.1:5111
+curl -sI http://127.0.0.1:5111/  # HTTP/1.1 302 FOUND, Location: /login?next=/
 ```
 
 The dashboard will say "snapshot file missing" until Step M5 below — expected.
 
 ### Step D6 — Caddy (HTTPS)
 
+Same pipe-rewrite trick — substitute your DNS name as we drop the file
+into place, so the cloned repo stays clean.
+
 ```bash
-sudo cp /home/monitor/ClusterMonitor/deploy/Caddyfile /etc/caddy/Caddyfile
-sudo $EDITOR /etc/caddy/Caddyfile     # change misha.example.com to your DNS name
+sudo sed 's#misha\.example\.com#<your hostname>#g' \
+    /home/monitor/ClusterMonitor/deploy/Caddyfile \
+    > /etc/caddy/Caddyfile
+
+sudo mkdir -p /var/log/caddy
+sudo chown caddy:caddy /var/log/caddy
+
 sudo systemctl reload caddy
-sudo journalctl -u caddy -f           # watch for "certificate obtained successfully"
+sudo journalctl -u caddy -n 50 --no-pager  # watch for "certificate obtained successfully"
 ```
+
+Test from the droplet itself:
+
+```bash
+curl -sI https://<your hostname>/
+# expect: HTTP/2 302, location: /login?next=/, server: Caddy
+```
+
+The two warnings you may see in the logs are both harmless:
+- `Caddyfile input is not formatted` — purely cosmetic whitespace.
+- `no OCSP server specified in certificate` — Let's Encrypt no longer
+  publishes OCSP info; nothing to fix.
 
 ---
 
@@ -192,20 +255,51 @@ You'll need Yale VPN once for these steps; after they're done, the
 chain runs autonomously and you never need VPN again to use the
 dashboard.
 
-### Step M1 — Copy the pusher to Misha
+> **Yale Duo 2FA prompts on every SSH/SCP**, which makes the
+> "scp-then-ssh" flow painful. The fix is to do everything in one SSH
+> session: log in once (one Duo prompt), and pull the pusher files via
+> `git clone` directly on Misha. We'll install into
+> `~/project/cluster_monitor` (Yale's group-quota project area), not
+> `~/`.
+>
+> Optional: set up SSH ControlMaster on your laptop to multiplex
+> connections within a 10-min window. Add to `~/.ssh/config`:
+> ```
+> Host misha
+>     HostName misha.ycrc.yale.edu
+>     User <your-netid>
+>     ControlMaster auto
+>     ControlPath ~/.ssh/cm-%r@%h:%p
+>     ControlPersist 10m
+> ```
+
+### Step M1 — Get the pusher onto Misha (single SSH session)
 
 From your laptop (on VPN):
 
 ```bash
-scp -r misha-side <your-netid>@misha.ycrc.yale.edu:~/cluster_monitor
+ssh <your-netid>@misha.ycrc.yale.edu          # one Duo prompt
+```
+
+Then **on Misha** — do M1 + M2 in one go:
+
+```bash
+# Pull the pusher files from the public repo
+cd /tmp
+rm -rf Yale_ClusterMonitor
+git clone https://github.com/<your-org>/Yale_ClusterMonitor.git
+mkdir -p ~/project/cluster_monitor
+cp -r Yale_ClusterMonitor/misha-side/. ~/project/cluster_monitor/
+rm -rf /tmp/Yale_ClusterMonitor
+ls -la ~/project/cluster_monitor               # expect: pusher.sbatch, setup.md
 ```
 
 ### Step M2 — Generate the push SSH key on Misha
 
-```bash
-ssh <your-netid>@misha.ycrc.yale.edu
+Still in the same SSH session:
 
-# On Misha:
+```bash
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
 ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519_monitor -C "misha-monitor-pusher"
 cat ~/.ssh/id_ed25519_monitor.pub      # ← copy this output
 ```
@@ -223,32 +317,54 @@ EOF
 
 ### Step M3 — Configure the pusher
 
-On Misha, edit `~/cluster_monitor/pusher.sbatch` and set:
+Patch `pusher.sbatch` in place — only `DROPLET_HOST` actually needs
+changing; the other defaults match what we want.
 
 ```bash
-DROPLET_USER=monitor
-DROPLET_HOST=<your droplet IP>
-SSH_KEY=$HOME/.ssh/id_ed25519_monitor
-PARTITIONS=gpu,gpu_devel
-INTERVAL=60
+cd ~/project/cluster_monitor
+sed -i 's#DROPLET_HOST:-203\.0\.113\.10#DROPLET_HOST:-<your droplet IP>#' pusher.sbatch
+grep -n 'DROPLET_HOST\|DROPLET_USER\|SSH_KEY\|PARTITIONS\|INTERVAL' pusher.sbatch
+```
+
+Final values should read:
+```
+DROPLET_USER="${DROPLET_USER:-monitor}"
+DROPLET_HOST="${DROPLET_HOST:-<your droplet IP>}"
+SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_monitor}"
+PARTITIONS="${PARTITIONS:-gpu,gpu_devel}"
+INTERVAL="${INTERVAL:-60}"
 ```
 
 ### Step M4 — One-shot manual push test
 
-```bash
-cd ~/cluster_monitor
+Pipe a real snapshot through the same SSH path the SLURM job will use,
+to confirm key + lockdown + receiver script are wired up correctly
+before committing to the long-running job.
 
-# Pipe a fake snapshot through the same SSH path the SLURM job uses:
+```bash
+cd ~/project/cluster_monitor
+
 {
-  echo "===META==="; date +%s | sed 's/^/generated_at /'
+  echo "===META==="
+  echo "generated_at $(date +%s)"
+  echo "node $(hostname)"
+  echo "job_id manual-test"
   echo "===SINFO==="
   sinfo -h -p gpu,gpu_devel -N -O 'Partition:25,NodeHost:30,CPUsState:20,AllocMem:14,Memory:14,Gres:50,GresUsed:80,StateLong:18'
   echo "===SQUEUE_R==="
   squeue -h -p gpu,gpu_devel -t R -O 'NodeList:60,JobID:15,UserName:15,Account:25,TimeUsed:15,TimeLimit:15,TimeLeft:15,EndTime:22,tres-alloc:120,Name:60'
   echo "===SQUEUE_PD==="
   squeue -h -p gpu,gpu_devel -t PD -O 'JobID:15,UserName:15,Account:25,Partition:15,Reason:25,TimeLimit:15,StartTime:22,tres-alloc:120,Name:60'
-} | ssh -o BatchMode=yes -i ~/.ssh/id_ed25519_monitor monitor@<DROPLET_IP>
+} | ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+    -i ~/.ssh/id_ed25519_monitor monitor@<DROPLET_IP>
 ```
+
+The `StrictHostKeyChecking=accept-new` makes the first connection TOFU
+the droplet's host key without an interactive prompt. Subsequent pushes
+verify against `~/.ssh/known_hosts`.
+
+A successful push closes silently — no stdout/stderr from `ssh` means
+the receiver wrote the snapshot and exited 0.
 
 Confirm on the **droplet**:
 
@@ -270,7 +386,7 @@ already works — refresh your browser.
 Still on Misha:
 
 ```bash
-cd ~/cluster_monitor
+cd ~/project/cluster_monitor
 sbatch pusher.sbatch
 squeue --me -n monitor_pusher
 tail -f monitor_pusher.<jobid>.log
@@ -328,9 +444,9 @@ The app re-reads `users.json` on every login — no restart needed.
 | Reset a password | droplet | `… manage_users.py reset <user>` |
 | Remove a user | droplet | `… manage_users.py remove <user>` |
 | Check pusher chain | misha | `squeue --me -n monitor_pusher` |
-| Tail pusher log | misha | `tail -f ~/cluster_monitor/monitor_pusher.*.log` |
+| Tail pusher log | misha | `tail -f ~/project/cluster_monitor/monitor_pusher.*.log` |
 | Stop the chain | misha | `scancel -n monitor_pusher` |
-| Restart the chain | misha | `cd ~/cluster_monitor && sbatch pusher.sbatch` |
+| Restart the chain | misha | `cd ~/project/cluster_monitor && sbatch pusher.sbatch` |
 
 ## Troubleshooting
 
