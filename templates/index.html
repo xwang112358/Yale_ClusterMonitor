@@ -82,6 +82,29 @@
   button.btn:hover { border-color: var(--accent); color: var(--accent); }
   button.btn.spinning { pointer-events: none; opacity: 0.5; }
 
+  a.btn-nav {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--card);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    padding: 8px 18px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 0.95rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-decoration: none;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  a.btn-nav:hover {
+    background: var(--accent);
+    color: var(--bg);
+    text-decoration: none;
+  }
+  a.btn-nav .arrow { font-size: 1.1rem; line-height: 1; }
+
   .section-title {
     font-size: 0.72rem;
     color: var(--text-dim);
@@ -363,7 +386,10 @@
 <body>
 
 <header>
-  <h1>Misha Monitor<span class="host">{{ misha_host }} &middot; {{ partitions }}</span></h1>
+  <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+    <a href="/azure" class="btn-nav">Azure Usage <span class="arrow">&rarr;</span></a>
+    <h1>Misha Monitor<span class="host">{{ misha_host }} &middot; {{ partitions }}</span></h1>
+  </div>
   <div class="header-right">
     <span class="who">{{ display }}</span>
     <button class="btn" onclick="fetchData()" id="refresh-btn">Refresh</button>

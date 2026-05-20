@@ -1,8 +1,10 @@
 # Misha Monitor — Upgrade & Maintenance
 
 Day-to-day operations after the initial deploy. Companion to
-[DEPLOY.md](DEPLOY.md) (first-time setup) and
-[deployment_history.md](deployment_history.md) (this deployment's log).
+[DEPLOY.md](DEPLOY.md) (first-time setup),
+[deployment_history.md](deployment_history.md) (this deployment's log),
+and [DEPLOY_AZURE.md](DEPLOY_AZURE.md) (one-time rollout of the Azure
+Usage `/azure` view).
 
 All commands assume the values from the live deployment:
 - Droplet: `root@159.223.173.141`, hostname `mishamonitor.duckdns.org`

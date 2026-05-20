@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Azure Usage{% if ctx.resource_group %} — {{ ctx.resource_group }}{% endif %}</title>
+<link rel="icon" type="image/png" href="/static/img/favicon.png">
+<style>
+  :root {
+    --bg: #0f1117;
+    --card: #1a1d27;
+    --card-soft: #20232f;
+    --card-border: #2a2d3a;
+    --text: #e0e0e0;
+    --text-dim: #888;
+    --accent: #6c8cff;
+    --green: #4caf50;
+    --yellow: #ff9800;
+    --red: #f44336;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    background: var(--bg);
+    color: var(--text);
+    padding: 20px;
+    min-height: 100vh;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 18px; padding-bottom: 14px;
+    border-bottom: 1px solid var(--card-border);
+    gap: 16px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 1.2rem; font-weight: 600; letter-spacing: 0.5px; }
+  header h1 .rg { color: var(--text-dim); font-weight: 400; font-size: 0.85rem; margin-left: 8px; }
+  .header-right {
+    display: flex; gap: 14px; align-items: center;
+    font-size: 0.78rem; color: var(--text-dim);
+  }
+  .header-right .who { color: var(--text); }
+  .header-right .meta { color: var(--text-dim); font-size: 0.72rem; }
+
+  button.btn, a.btn {
+    background: none;
+    border: 1px solid var(--card-border);
+    color: var(--text-dim);
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.75rem;
+    transition: border-color 0.2s, color 0.2s;
+    text-decoration: none;
+    display: inline-block;
+  }
+  button.btn:hover, a.btn:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
+
+  a.btn-nav {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--card);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    padding: 8px 18px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 0.95rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-decoration: none;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  a.btn-nav:hover {
+    background: var(--accent);
+    color: var(--bg);
+    text-decoration: none;
+  }
+  a.btn-nav .arrow { font-size: 1.1rem; line-height: 1; }
+
+  .notes {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin-bottom: 18px;
+    font-size: 0.78rem;
+    line-height: 1.55;
+  }
+  .notes-title {
+    font-size: 0.66rem; color: var(--accent);
+    text-transform: uppercase; letter-spacing: 1.4px;
+    margin-bottom: 6px; font-weight: 600;
+  }
+  .notes ul { list-style: none; padding: 0; margin: 0; }
+  .notes li { padding: 3px 0; }
+  .notes li::before { content: "›"; color: var(--accent); margin-right: 8px; font-weight: 600; }
+  .notes b { color: var(--text); }
+  .notes .dim { color: var(--text-dim); }
+  .notes a { color: var(--accent); border-bottom: 1px dotted var(--accent); }
+  .notes a:hover { border-bottom-style: solid; text-decoration: none; }
+
+  .kpi-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .kpi {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    padding: 10px 14px;
+  }
+  .kpi .label {
+    font-size: 0.68rem; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 4px;
+  }
+  .kpi .value { font-size: 1.35rem; font-weight: 600; }
+  .kpi .sub { font-size: 0.7rem; color: var(--text-dim); margin-top: 3px; }
+  .kpi .value.over { color: var(--red); }
+  .kpi .value.ok   { color: var(--green); }
+
+  .section-title {
+    font-size: 0.72rem; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 1.2px;
+    margin: 22px 0 10px;
+    display: flex; align-items: baseline; justify-content: space-between;
+  }
+  .section-title .hint {
+    font-size: 0.68rem; color: var(--text-dim);
+    text-transform: none; letter-spacing: 0.4px;
+  }
+
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    padding: 10px;
+  }
+  .panel-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 1000px) { .panel-row { grid-template-columns: 1fr; } }
+
+  .empty { padding: 18px 14px; color: var(--text-dim); font-size: 0.78rem; text-align: center; }
+  .error {
+    background: var(--card);
+    border: 1px solid var(--red);
+    border-left: 3px solid var(--red);
+    color: var(--red);
+    padding: 18px 22px;
+    border-radius: 6px;
+    margin-bottom: 18px;
+    font-size: 0.85rem;
+  }
+
+  .footer {
+    margin-top: 28px; padding-top: 14px;
+    border-top: 1px solid var(--card-border);
+    color: var(--text-dim); font-size: 0.7rem;
+    display: flex; justify-content: space-between;
+  }
+</style>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+</head>
+<body>
+
+<header>
+  <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+    <a href="{{ url_for('index') }}" class="btn-nav"><span class="arrow">&larr;</span> Misha Monitor</a>
+    <h1>Azure Usage{% if ctx.resource_group %}<span class="rg">{{ ctx.resource_group }}</span>{% endif %}</h1>
+  </div>
+  <div class="header-right">
+    <span class="who">{{ display }}</span>
+    <a href="{{ url_for('logout') }}" class="btn">Sign out</a>
+    {% if ctx.generated_at %}<span class="meta">snapshot: {{ ctx.generated_at }}</span>{% endif %}
+  </div>
+</header>
+
+{% if ctx.error %}
+  <div class="error">
+    <b>Dashboard unavailable.</b> {{ ctx.error }}
+  </div>
+{% else %}
+
+<div class="notes">
+  <div class="notes-title">Notes</div>
+  <ul>
+    <li>
+      <b>Data latency:</b> numbers come from Azure Cost Management and lag the
+      real world by roughly <b>8&ndash;24 hours</b>. Calls you made today
+      probably won't show up until tomorrow &mdash; don't panic if a fresh
+      deployment looks like $0.
+    </li>
+    <li>
+      <b>Who to contact:</b> ping
+      <a href="mailto:allen.wang.xw532@yale.edu">Allen Wang</a> or
+      <a href="mailto:hyunjae.kim@yale.edu">Hyunjae Kim</a>
+      if you see unexpected spend on your resource, need a new deployment / key,
+      want to raise the monthly budget, or hit a 429 / quota error you can't explain.
+    </li>
+    <li>
+      <b>Billed vs estimated:</b> &ldquo;MTD billed&rdquo; is the real invoiced
+      number from Azure Cost Management. The token-based estimate is a
+      diagnostic only.
+    </li>
+    <li>
+      <b>Refresh:</b> the dashboard does not auto-poll. Ping an admin if you
+      need a fresh snapshot before the next scheduled update.
+    </li>
+  </ul>
+</div>
+
+<div class="kpi-strip">
+  <div class="kpi">
+    <div class="label">MTD billed</div>
+    <div class="value {% if ctx.over %}over{% else %}ok{% endif %}">${{ "{:,.2f}".format(ctx.billed) }}</div>
+    <div class="sub">real invoiced (Cost Management)</div>
+  </div>
+  <div class="kpi">
+    <div class="label">Monthly budget</div>
+    <div class="value">${{ "{:,.0f}".format(ctx.budget) }}</div>
+    <div class="sub" style="color: {% if ctx.over %}var(--red){% else %}var(--green){% endif %};">{{ "{:.1f}".format(ctx.pct) }}% used</div>
+  </div>
+  <div class="kpi">
+    <div class="label">Token-based estimate</div>
+    <div class="value">${{ "{:,.2f}".format(ctx.estimated) }}</div>
+    <div class="sub">gap vs billed: ${{ "{:+,.2f}".format(ctx.gap) }}</div>
+  </div>
+  <div class="kpi">
+    <div class="label">Active resources</div>
+    <div class="value">{{ ctx.n_resources }}</div>
+    <div class="sub">in {{ ctx.resource_group }}</div>
+  </div>
+</div>
+
+<div class="section-title">
+  Spend by resource
+  <span class="hint">stacked by model family &mdash; hover a segment to see that model's $ on that resource &middot; click legend to toggle</span>
+</div>
+<div class="panel">{{ ctx.fig_stacked | safe }}</div>
+
+<div class="panel-row">
+  <div>
+    <div class="section-title">Daily billed (MTD)<span class="hint">across all resources</span></div>
+    <div class="panel">{{ ctx.fig_daily | safe }}</div>
+  </div>
+  <div>
+    <div class="section-title">Cumulative MTD<span class="hint">vs monthly budget</span></div>
+    <div class="panel">{{ ctx.fig_cumulative | safe }}</div>
+  </div>
+</div>
+
+<div class="section-title">
+  Per-resource daily trend
+  <span class="hint">pick a resource from the dropdown &middot; bars = daily spend by model, dotted line = cumulative</span>
+</div>
+<div class="panel">{{ ctx.fig_per_resource | safe }}</div>
+
+{% endif %}
+
+<div class="footer">
+  <span>Data source: Azure Cost Management <code>/query</code> + Azure Monitor metrics</span>
+  <span><a href="{{ url_for('index') }}">&larr; back to Misha Monitor</a></span>
+</div>
+
+</body>
+</html>

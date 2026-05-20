@@ -486,6 +486,26 @@ def api_cluster():
     return jsonify(get_data())
 
 
+@app.route("/azure")
+@login_required
+def azure():
+    # Lazy import: keeps Misha Monitor working even if plotly isn't installed.
+    try:
+        from azure_dashboard import build_context
+        ctx = build_context()
+    except ImportError as e:
+        ctx = {"error": f"Azure dashboard module not available: {e}. "
+                        "Run: pip install plotly"}
+    except Exception as e:
+        ctx = {"error": f"Failed to build dashboard: {e}"}
+    return render_template(
+        "azure.html",
+        ctx=ctx,
+        display=session.get("display", session.get("user", "")),
+        user=session.get("user", ""),
+    )
+
+
 @app.route("/healthz")
 def healthz():
     return jsonify({"ok": True, "cache_age_seconds": int(time.time() - _cache["ts"]) if _cache["ts"] else None})
