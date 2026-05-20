@@ -82,7 +82,7 @@ sudo -u monitor bash -lc '
 
   # Reuse the Flask app venv (or make a fresh one)
   ~/ClusterMonitor/.venv/bin/pip install \
-      azure-identity azure-monitor-query azure-mgmt-resource \
+      azure-identity "azure-monitor-query<2.0" azure-mgmt-resource \
       python-dotenv requests plotly
 '
 ```
@@ -135,7 +135,7 @@ systemctl daemon-reload
 systemctl restart misha-monitor
 ```
 
-Add a systemd timer (or cron) to refresh every 6 hours. Systemd timer is
+Add a systemd timer (or cron) to refresh every 2 hours. Systemd timer is
 cleaner — drop two files in `/etc/systemd/system/`:
 
 ```bash
@@ -153,11 +153,11 @@ EOF
 
 cat >/etc/systemd/system/azure-usage-monitor.timer <<'EOF'
 [Unit]
-Description=Run Azure usage refresh every 6 hours
+Description=Run Azure usage refresh every 2 hours
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=6h
+OnUnitActiveSec=2h
 Persistent=true
 
 [Install]
