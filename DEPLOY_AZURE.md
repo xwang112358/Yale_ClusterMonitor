@@ -135,7 +135,7 @@ systemctl daemon-reload
 systemctl restart misha-monitor
 ```
 
-Add a systemd timer (or cron) to refresh every 2 hours. Systemd timer is
+Add a systemd timer (or cron) to refresh every 4 hours. Systemd timer is
 cleaner — drop two files in `/etc/systemd/system/`:
 
 ```bash
@@ -153,11 +153,11 @@ EOF
 
 cat >/etc/systemd/system/azure-usage-monitor.timer <<'EOF'
 [Unit]
-Description=Run Azure usage refresh every 2 hours
+Description=Run Azure usage refresh every 4 hours
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=2h
+OnUnitActiveSec=4h
 Persistent=true
 
 [Install]
