@@ -82,6 +82,23 @@
   }
   a.btn-nav .arrow { font-size: 1.1rem; line-height: 1; }
 
+  /* Month navigation */
+  .navbar { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+  .navrow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .navrow .navlabel { font-size: 0.66rem; color: var(--text-dim); text-transform: uppercase;
+                      letter-spacing: 1.2px; width: 58px; }
+  #year-bar button, #month-bar button {
+    background: var(--card); border: 1px solid var(--card-border); color: var(--text);
+    border-radius: 6px; padding: 5px 12px; font-family: inherit; font-size: 0.78rem;
+    cursor: pointer; transition: all 0.12s;
+  }
+  #year-bar button:hover:not(:disabled), #month-bar button:hover:not(:disabled) { border-color: var(--accent); }
+  #year-bar button.active, #month-bar button.active { background: var(--accent); border-color: var(--accent); color: #0b0d13; font-weight: 600; }
+  #month-bar button:disabled { opacity: 0.32; cursor: default; }
+  #month-bar button .dot { color: var(--green); font-size: 0.7rem; margin-left: 5px; }
+  .live-pill { font-size: 0.62rem; color: var(--green); border: 1px solid var(--green);
+               border-radius: 10px; padding: 1px 8px; margin-left: 8px; letter-spacing: 0.5px; }
+
   .notes {
     background: var(--card);
     border: 1px solid var(--card-border);
@@ -125,6 +142,7 @@
   .kpi .sub { font-size: 0.7rem; color: var(--text-dim); margin-top: 3px; }
   .kpi .value.over { color: var(--red); }
   .kpi .value.ok   { color: var(--green); }
+  .kpi .label .dim { color: var(--text-dim); font-weight: 400; }
 
   .section-title {
     font-size: 0.72rem; color: var(--text-dim);
@@ -146,7 +164,19 @@
   .panel-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   @media (max-width: 1000px) { .panel-row { grid-template-columns: 1fr; } }
 
-  .empty { padding: 18px 14px; color: var(--text-dim); font-size: 0.78rem; text-align: center; }
+  table.res { width: 100%; border-collapse: collapse; font-size: 0.76rem; }
+  table.res th, table.res td { text-align: right; padding: 6px 10px; border-bottom: 1px solid var(--card-border); }
+  table.res th:first-child, table.res td:first-child { text-align: left; }
+  table.res th { color: var(--text-dim); font-weight: 500; text-transform: uppercase;
+                 font-size: 0.62rem; letter-spacing: 1px; }
+  table.res tr:hover td { background: var(--card-soft); }
+  .badge { font-size: 0.58rem; padding: 1px 6px; border-radius: 8px; letter-spacing: 0.6px; margin-left: 8px; }
+  .badge.new { color: var(--yellow); border: 1px solid var(--yellow); }
+  .badge.idle { color: var(--text-dim); border: 1px solid var(--card-border); }
+  .dim { color: var(--text-dim); }
+
+  .empty { padding: 28px 14px; color: var(--text-dim); font-size: 0.82rem; text-align: center; }
+  .plotly-host { width: 100%; }
   .error {
     background: var(--card);
     border: 1px solid var(--red);
@@ -187,14 +217,25 @@
   </div>
 {% else %}
 
+<div class="navbar">
+  <div class="navrow"><span class="navlabel">Year</span><span id="year-bar"></span></div>
+  <div class="navrow"><span class="navlabel">Month</span><span id="month-bar"></span>
+       <span id="live-pill" class="live-pill" style="display:none;">&#9679; VIEWING CURRENT MONTH</span></div>
+</div>
+
 <div class="notes">
   <div class="notes-title">Notes</div>
   <ul>
     <li>
-      <b>Data latency:</b> numbers come from Azure Cost Management and lag the
-      real world by roughly <b>8&ndash;24 hours</b>. Calls you made today
-      probably won't show up until tomorrow &mdash; don't panic if a fresh
-      deployment looks like $0.
+      <b>Month view:</b> the dashboard opens on the <b>current month (US Eastern)</b> and rolls
+      over automatically on the 1st. Use the Year / Month buttons to read any past month we have
+      data for.
+    </li>
+    <li>
+      <b>Data latency:</b> numbers come from Azure Cost Management and lag the real world by
+      roughly <b>8&ndash;24 hours</b>. A freshly created resource shows up under
+      <b>Tracked resources</b> (flagged NEW) before it has any billed spend &mdash; don't panic if
+      it reads $0.
     </li>
     <li>
       <b>Who to contact:</b> ping
@@ -204,62 +245,43 @@
       want to raise the monthly budget, or hit a 429 / quota error you can't explain.
     </li>
     <li>
-      <b>Billed vs estimated:</b> &ldquo;MTD billed&rdquo; is the real invoiced
-      number from Azure Cost Management. The token-based estimate is a
-      diagnostic only.
-    </li>
-    <li>
-      <b>Refresh:</b> the dashboard does not auto-poll. Ping an admin if you
-      need a fresh snapshot before the next scheduled update.
+      <b>Billed vs estimated:</b> &ldquo;billed&rdquo; is the real invoiced number from Azure Cost
+      Management. The token-based estimate is a diagnostic only and is current-month-only.
     </li>
   </ul>
 </div>
 
 <div class="kpi-strip">
-  <div class="kpi">
-    <div class="label">MTD billed</div>
-    <div class="value {% if ctx.over %}over{% else %}ok{% endif %}">${{ "{:,.2f}".format(ctx.billed) }}</div>
-    <div class="sub">real invoiced (Cost Management)</div>
-  </div>
-  <div class="kpi">
-    <div class="label">Monthly budget</div>
-    <div class="value">${{ "{:,.0f}".format(ctx.budget) }}</div>
-    <div class="sub" style="color: {% if ctx.over %}var(--red){% else %}var(--green){% endif %};">{{ "{:.1f}".format(ctx.pct) }}% used</div>
-  </div>
-  <div class="kpi">
-    <div class="label">Token-based estimate</div>
-    <div class="value">${{ "{:,.2f}".format(ctx.estimated) }}</div>
-    <div class="sub">gap vs billed: ${{ "{:+,.2f}".format(ctx.gap) }}</div>
-  </div>
-  <div class="kpi">
-    <div class="label">Active resources</div>
-    <div class="value">{{ ctx.n_resources }}</div>
-    <div class="sub">in {{ ctx.resource_group }}</div>
-  </div>
+  <div class="kpi"><div class="label">Billed <span id="kpi-period" class="dim"></span></div>
+    <div id="kpi-billed" class="value">&mdash;</div><div class="sub">real invoiced (Cost Management)</div></div>
+  <div class="kpi"><div class="label">Monthly budget</div>
+    <div class="value">${{ ctx.budget_str }}</div><div id="kpi-pct" class="sub">&mdash;</div></div>
+  <div class="kpi"><div class="label">Token-based estimate</div>
+    <div id="kpi-est" class="value">&mdash;</div><div id="kpi-est-sub" class="sub">current month only</div></div>
+  <div class="kpi"><div class="label">Tracked resources</div>
+    <div id="kpi-res" class="value">&mdash;</div><div id="kpi-res-sub" class="sub">&mdash;</div></div>
 </div>
 
-<div class="section-title">
-  Spend by resource
-  <span class="hint">stacked by model family &mdash; hover a segment to see that model's $ on that resource &middot; click legend to toggle</span>
-</div>
-<div class="panel">{{ ctx.fig_stacked | safe }}</div>
+<div class="section-title">Spend by resource
+  <span class="hint">stacked by model family &middot; hover a segment &middot; &#9711; = no billed spend yet</span></div>
+<div class="panel"><div id="fig-stacked" class="plotly-host"></div></div>
 
 <div class="panel-row">
-  <div>
-    <div class="section-title">Daily billed (MTD)<span class="hint">across all resources</span></div>
-    <div class="panel">{{ ctx.fig_daily | safe }}</div>
-  </div>
-  <div>
-    <div class="section-title">Cumulative MTD<span class="hint">vs monthly budget</span></div>
-    <div class="panel">{{ ctx.fig_cumulative | safe }}</div>
-  </div>
+  <div><div class="section-title">Daily billed<span class="hint">selected month</span></div>
+       <div class="panel"><div id="fig-daily" class="plotly-host"></div></div></div>
+  <div><div class="section-title">Cumulative<span class="hint">vs monthly budget</span></div>
+       <div class="panel"><div id="fig-cumulative" class="plotly-host"></div></div></div>
 </div>
 
-<div class="section-title">
-  Per-resource daily trend
-  <span class="hint">pick a resource from the dropdown &middot; bars = daily spend by model, dotted line = cumulative</span>
-</div>
-<div class="panel">{{ ctx.fig_per_resource | safe }}</div>
+<div class="section-title">Per-resource daily trend
+  <span class="hint">pick a resource from the dropdown &middot; sorted by spend</span></div>
+<div class="panel"><div id="fig-per-resource" class="plotly-host"></div></div>
+
+<div class="section-title">Tracked resources
+  <span class="hint" id="res-table-hint">every resource discovered in the group</span></div>
+<div class="panel"><table class="res"><thead><tr>
+  <th>Resource</th><th>Billed $</th><th>Est $</th><th>Tokens</th><th>Calls</th>
+</tr></thead><tbody id="res-tbody"></tbody></table></div>
 
 {% endif %}
 
@@ -267,6 +289,212 @@
   <span>Data source: Azure Cost Management <code>/query</code> + Azure Monitor metrics</span>
   <span><a href="{{ url_for('index') }}">&larr; back to Misha Monitor</a></span>
 </div>
+
+{% if not ctx.error %}
+<script>
+const MONTHS = {{ ctx.months_json | safe }};
+const MONTH_KEYS = {{ ctx.month_keys_json | safe }};   // sorted ascending
+const BUDGET = {{ ctx.budget_json | safe }};
+const ROSTER = {{ ctx.roster_json | safe }};           // all currently discovered resources
+const SNAP_ESTIMATED = {{ ctx.snap_estimated_json | safe }};
+const MLAB = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const PLOT_CFG = {displaylogo:false, responsive:true, modeBarButtonsToRemove:["lasso2d","select2d"]};
+const FIGS = ["stacked","daily","cumulative","per_resource"];
+
+let selected = null;       // "YYYY-MM"
+let followCurrent = true;  // auto-advance on rollover until the user navigates
+
+function etMonth() {
+  const parts = new Intl.DateTimeFormat('en-US',
+      {timeZone:'America/New_York', year:'numeric', month:'2-digit'}).formatToParts(new Date());
+  let y="", m="";
+  for (const p of parts) { if (p.type==='year') y=p.value; if (p.type==='month') m=p.value; }
+  return y + "-" + m;
+}
+
+function fmtMoney(v) { return "$" + Number(v).toLocaleString('en-US',{minimumFractionDigits:2, maximumFractionDigits:2}); }
+function fmtInt(v) { return Number(v).toLocaleString('en-US'); }
+
+function years() {
+  const ys = new Set(MONTH_KEYS.map(k => k.slice(0,4)));
+  ys.add(etMonth().slice(0,4));
+  return Array.from(ys).sort();
+}
+function monthsInYear(y) {
+  return MONTH_KEYS.filter(k => k.startsWith(y)).map(k => parseInt(k.slice(5,7),10));
+}
+
+function buildNav() {
+  const cur = etMonth();
+  const yb = document.getElementById('year-bar');
+  yb.innerHTML = "";
+  years().forEach(y => {
+    const b = document.createElement('button');
+    b.textContent = y; b.dataset.year = y;
+    b.onclick = () => selectYear(y);
+    yb.appendChild(b);
+  });
+  renderMonthBar(selected ? selected.slice(0,4) : cur.slice(0,4));
+}
+
+function renderMonthBar(year) {
+  const cur = etMonth();
+  const avail = monthsInYear(year);
+  const mb = document.getElementById('month-bar');
+  mb.innerHTML = "";
+  for (let m = 1; m <= 12; m++) {
+    const key = year + "-" + String(m).padStart(2,'0');
+    const b = document.createElement('button');
+    b.dataset.month = key;
+    b.innerHTML = MLAB[m-1] + (key === cur ? '<span class="dot">&#9679;</span>' : '');
+    const hasData = avail.includes(m);
+    b.disabled = !hasData && key !== cur;   // current month always clickable (may be empty)
+    b.onclick = () => selectMonth(key);
+    mb.appendChild(b);
+  }
+  document.querySelectorAll('#year-bar button').forEach(el =>
+    el.classList.toggle('active', el.dataset.year === year));
+}
+
+function selectYear(year) {
+  renderMonthBar(year);
+  const cur = etMonth();
+  let target;
+  if (year === cur.slice(0,4) && MONTHS[cur]) target = cur;
+  const avail = monthsInYear(year);
+  if (!target) {
+    target = avail.length ? year + "-" + String(Math.max(...avail)).padStart(2,'0') : cur;
+  }
+  selectMonth(target);
+}
+
+function selectMonth(key) {
+  const cur = etMonth();
+  followCurrent = (key === cur);
+  selected = key;
+  if (document.querySelectorAll('#month-bar button[data-month="'+key+'"]').length === 0) {
+    renderMonthBar(key.slice(0,4));
+  }
+  document.querySelectorAll('#month-bar button').forEach(el =>
+    el.classList.toggle('active', el.dataset.month === key));
+  document.querySelectorAll('#year-bar button').forEach(el =>
+    el.classList.toggle('active', el.dataset.year === key.slice(0,4)));
+  document.getElementById('live-pill').style.display = (key === cur) ? '' : 'none';
+  if (window.history && history.replaceState) history.replaceState(null, '', '#' + key);
+  renderMonth(key);
+}
+
+function monthName(key) {
+  return MLAB[parseInt(key.slice(5,7),10)-1] + " " + key.slice(0,4);
+}
+
+function buildResourceRows(key, data) {
+  const isLive = (key === etMonth());
+  const rows = {};
+  (data ? data.resources : []).forEach(r => {
+    rows[r.name] = {name: r.name, billed: r.billed, est: null, tokens: null,
+                    calls: null, idle: r.idle};
+  });
+  if (isLive) {
+    ROSTER.forEach(r => {
+      const ex = rows[r.name] || {name: r.name, billed: 0, idle: true};
+      ex.est = r.est; ex.tokens = r.tokens; ex.calls = r.calls;
+      ex.idle = (ex.billed === 0);
+      rows[r.name] = ex;
+    });
+  }
+  return Object.values(rows).sort((a, b) =>
+      (b.billed - a.billed) || ((b.calls || 0) - (a.calls || 0)));
+}
+
+function emptyFig(divId, msg) {
+  Plotly.purge(divId);
+  document.getElementById(divId).innerHTML = '<div class="empty">' + msg + '</div>';
+}
+
+function renderMonth(key) {
+  const data = MONTHS[key];
+  const isLive = (key === etMonth());
+  document.getElementById('kpi-period').textContent = "· " + monthName(key);
+
+  const billed = data ? data.billed : 0;
+  const pct = data ? data.pct : 0;
+  const over = data ? data.over : false;
+  const bEl = document.getElementById('kpi-billed');
+  bEl.textContent = fmtMoney(billed);
+  bEl.className = "value " + (over ? "over" : "ok");
+  const pctEl = document.getElementById('kpi-pct');
+  pctEl.textContent = pct.toFixed(1) + "% used";
+  pctEl.style.color = over ? "var(--red)" : "var(--green)";
+
+  const est = isLive ? SNAP_ESTIMATED : null;
+  document.getElementById('kpi-est').textContent = (est == null) ? "—" : fmtMoney(est);
+  document.getElementById('kpi-est-sub').textContent = (est == null)
+      ? "current month only" : "gap vs billed: " + fmtMoney(billed - est);
+
+  FIGS.forEach(f => {
+    const divId = "fig-" + (f === "per_resource" ? "per-resource" : f);
+    const fig = data && data.figs[f];
+    if (fig) { Plotly.react(divId, fig.data, fig.layout, PLOT_CFG); }
+    else { emptyFig(divId, data ? "No data for this chart."
+                                : "No billing yet for " + monthName(key) + " — Cost Management lags 8–24h."); }
+  });
+
+  const rows = buildResourceRows(key, data);
+  const nBilling = rows.filter(r => !r.idle).length;
+  const nIdle = rows.length - nBilling;
+  document.getElementById('kpi-res').textContent = rows.length || "—";
+  document.getElementById('kpi-res-sub').textContent =
+      rows.length ? (nBilling + " billing · " + nIdle + " idle/new") : "no resources";
+  document.getElementById('res-table-hint').textContent = isLive
+      ? "every resource discovered in the group · NEW = no spend yet · IDLE = has calls, no bill"
+      : "resources billed in " + monthName(key);
+
+  const tb = document.getElementById('res-tbody');
+  tb.innerHTML = "";
+  if (!rows.length) {
+    tb.innerHTML = '<tr><td colspan="5" class="dim" style="text-align:center;padding:18px;">No data for this month.</td></tr>';
+    return;
+  }
+  rows.forEach(r => {
+    let badge = "";
+    if (r.idle) badge = (r.calls ? '<span class="badge idle">IDLE</span>'
+                                 : '<span class="badge new">NEW</span>');
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td>' + r.name + badge + '</td>' +
+      '<td>' + (r.billed ? fmtMoney(r.billed) : '<span class="dim">$0.00</span>') + '</td>' +
+      '<td>' + (r.est == null ? '<span class="dim">—</span>' : fmtMoney(r.est)) + '</td>' +
+      '<td>' + (r.tokens == null ? '<span class="dim">—</span>' : fmtInt(r.tokens)) + '</td>' +
+      '<td>' + (r.calls == null ? '<span class="dim">—</span>' : fmtInt(r.calls)) + '</td>';
+    tb.appendChild(tr);
+  });
+}
+
+function initialMonth() {
+  // Always open on the current (US Eastern) month — that is the "refresh on the
+  // 1st" behavior. Early in a month it may have no billing yet (Cost Management
+  // lags 8–24h); the charts say so and the roster table still lists every
+  // resource, so brand-new resources stay visible. Past months are a click away.
+  return etMonth();
+}
+
+function watchRollover() {
+  setInterval(() => {
+    const cur = etMonth();
+    if (followCurrent && selected !== cur) {
+      buildNav();
+      selectMonth(cur);
+    }
+  }, 60000);
+}
+
+buildNav();
+const _hash = location.hash.slice(1);
+selectMonth(/^\d{4}-\d{2}$/.test(_hash) ? _hash : initialMonth());
+watchRollover();
+</script>
+{% endif %}
 
 </body>
 </html>

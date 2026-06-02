@@ -1,12 +1,19 @@
-"""Figure builders for the Azure usage dashboard.
+"""Data + figure layer for the Azure usage dashboard (/azure route).
 
-Reads usage.db (path from AZURE_USAGE_DB env var, default ../usage.db)
-and produces Plotly figures as HTML divs ready to inject into a Jinja
-template. Plotly.js is loaded once from CDN by the template — figures
-themselves use include_plotlyjs=False.
+Reads usage.db (path from AZURE_USAGE_DB env var, default ../usage.db) and
+returns template context for templates/azure.html.
 
-Same dark palette as templates/index.html so the Azure page reads as
-part of the same product.
+Design (kept in sync with the standalone d:\\xwang\\summer26\\monitor\\dashboard.py):
+  * Per-month figures are pre-rendered server-side and embedded as JSON. The
+    template's JS switches months client-side via Plotly.react(), so reading any
+    past month is instant and the page defaults to the current month in US
+    Eastern time (auto-rolling on the 1st).
+  * A "Tracked resources" table merges the live snapshot roster onto the ET
+    current month, so brand-new / idle resources with no billed spend are always
+    visible instead of dropping out of the billing-only charts.
+
+Plotly.js is loaded once from CDN by the template; figures are serialized with
+fig.to_json() (no inline Plotly.js).
 """
 
 import json
@@ -38,6 +45,7 @@ FAMILY_COLORS = {
     "gpt-3.5": "#0d9488",
     "o3-mini": "#ea580c", "o3": "#f97316",
     "o1-mini": "#facc15", "o1": "#eab308",
+    "claude": "#d97757",
     "embed": "#16a34a",
     "other": "#64748b",
 }
@@ -58,6 +66,7 @@ FAMILY_PATTERNS = [
     (re.compile(r"\bo3\b",             re.I), "o3"),
     (re.compile(r"\bo1[\s\-]?mini\b",  re.I), "o1-mini"),
     (re.compile(r"\bo1\b",             re.I), "o1"),
+    (re.compile(r"claude",  re.I),             "claude"),
     (re.compile(r"embed", re.I),               "embed"),
 ]
 
@@ -71,7 +80,7 @@ def model_family(meter):
     return "other"
 
 
-# ----------------- Figure builders -----------------
+# ----------------- Figure builders (one month's rows) -----------------
 
 def _base_layout(extra=None):
     layout = dict(
@@ -132,15 +141,29 @@ def stacked_bar_figure(billed_rows):
             hovertemplate="%{customdata}<extra></extra>",
             customdata=hovers,
         ))
+
+    zero_names = [r for r in resources_sorted
+                  if sum(res_family_cost[r].values()) == 0.0]
+    if zero_names:
+        fig.add_trace(go.Scatter(
+            x=[0] * len(zero_names), y=zero_names, mode="markers",
+            marker=dict(symbol="circle-open", size=9, color=TEXT_DIM,
+                        line=dict(width=1.5, color=TEXT_DIM)),
+            name="no billed spend", hoverinfo="text",
+            hovertext=[f"<b>{r}</b><br><span style='color:#888;'>no billed spend this month</span>"
+                       for r in zero_names],
+            showlegend=True,
+        ))
+
     fig.update_layout(**_base_layout(dict(
         barmode="stack",
-        xaxis=dict(title="MTD billed $ (USD)", tickprefix="$", tickformat=",.0f",
+        xaxis=dict(title="Billed $ (USD)", tickprefix="$", tickformat=",.0f",
                    gridcolor=CARD_BORDER, zerolinecolor=CARD_BORDER),
         yaxis=dict(gridcolor=CARD_BORDER, automargin=True),
         legend=dict(orientation="h", yanchor="bottom", y=1.02,
                     xanchor="right", x=1, bgcolor="rgba(0,0,0,0)",
                     font=dict(color=TEXT, size=11)),
-        height=max(360, 36 * len(resources_sorted) + 80),
+        height=max(360, 34 * len(resources_sorted) + 90),
     )))
     return fig
 
@@ -295,7 +318,7 @@ def per_resource_daily_figure(billed_rows):
             args=[
                 {"visible": visible},
                 {"annotations": [dict(
-                    text=f"<b>{r}</b>  ·  MTD ${total:,.2f}",
+                    text=f"<b>{r}</b>  ·  ${total:,.2f}",
                     showarrow=False, x=0, y=1.18, xref="paper", yref="paper",
                     font=dict(color=TEXT, size=13), align="left", xanchor="left",
                 )]},
@@ -325,7 +348,7 @@ def per_resource_daily_figure(billed_rows):
             pad=dict(l=8, r=8, t=4, b=4),
         )],
         annotations=[dict(
-            text=f"<b>{first_r}</b>  ·  MTD ${first_total:,.2f}",
+            text=f"<b>{first_r}</b>  ·  ${first_total:,.2f}",
             showarrow=False, x=0, y=1.18, xref="paper", yref="paper",
             font=dict(color=TEXT, size=13), align="left", xanchor="left",
         )],
@@ -333,21 +356,70 @@ def per_resource_daily_figure(billed_rows):
     return fig
 
 
+# ----------------- Per-month assembly -----------------
+
+def fig_json(fig):
+    return json.loads(fig.to_json()) if fig is not None else None
+
+
+def group_by_month(billed_rows):
+    months = defaultdict(list)
+    for row in billed_rows:
+        months[row[0][:7]].append(row)
+    return months
+
+
+def build_month_payload(rows, budget):
+    daily_map = defaultdict(float)
+    res_billed = defaultdict(float)
+    for usage_date, rn, _m, cost in rows:
+        daily_map[usage_date] += cost
+        res_billed[rn] += cost
+    daily = sorted(daily_map.items())
+
+    billed = round(sum(c for _, c in daily), 2)
+    pct = round((billed / budget) * 100, 1) if budget else 0.0
+
+    resources = [{"name": n, "billed": round(b, 2), "idle": round(b, 2) == 0.0}
+                 for n, b in res_billed.items()]
+    resources.sort(key=lambda r: r["billed"], reverse=True)
+
+    return {
+        "billed": billed,
+        "pct": pct,
+        "over": billed > budget,
+        "figs": {
+            "stacked": fig_json(stacked_bar_figure(rows)),
+            "daily": fig_json(daily_line_figure(daily, budget)),
+            "cumulative": fig_json(cumulative_line_figure(daily, budget)),
+            "per_resource": fig_json(per_resource_daily_figure(rows)),
+        },
+        "resources": resources,
+    }
+
+
+def build_roster(snapshot):
+    mtd = snapshot.get("month_to_date", {})
+    roster = []
+    for r in mtd.get("by_resource", []):
+        roster.append({
+            "name": r["resource"],
+            "est": r.get("estimated_cost_usd"),
+            "tokens": r.get("total_tokens"),
+            "calls": r.get("calls"),
+        })
+    return roster, mtd.get("estimated_cost_usd")
+
+
+def _json_for_script(obj):
+    """Serialize for embedding inside a <script> block (neutralize </script>)."""
+    return json.dumps(obj).replace("</", "<\\/")
+
+
 # ----------------- Public entrypoint -----------------
 
-def _fig_html(fig, div_id):
-    """Render a figure as a div + Plotly.newPlot call (no inline Plotly.js)."""
-    if fig is None:
-        return f'<div id="{div_id}" class="empty">No data.</div>'
-    return fig.to_html(
-        include_plotlyjs=False, full_html=False, div_id=div_id,
-        config={"displaylogo": False, "responsive": True,
-                "modeBarButtonsToRemove": ["lasso2d", "select2d"]},
-    )
-
-
 def build_context(db_path=None):
-    """Read the latest snapshot from usage.db and return template context."""
+    """Read all of usage.db and return template context for azure.html."""
     db_path = Path(db_path) if db_path else DB_PATH
     if not db_path.exists():
         return {"error": f"usage.db not found at {db_path}. Run usage_monitor.py."}
@@ -365,40 +437,25 @@ def build_context(db_path=None):
         """
         SELECT usage_date, resource_name, meter, cost_usd
         FROM billed_costs
-        WHERE usage_date >= date('now', 'start of month')
         ORDER BY usage_date
-        """
-    ).fetchall()
-    daily = conn.execute(
-        """
-        SELECT usage_date AS day, SUM(cost_usd) AS cost
-        FROM billed_costs
-        WHERE usage_date >= date('now', 'start of month')
-        GROUP BY day ORDER BY day
         """
     ).fetchall()
     conn.close()
 
-    mtd = snapshot["month_to_date"]
-    billed = mtd.get("billed_cost_usd", 0.0)
-    estimated = mtd.get("estimated_cost_usd", 0.0)
-    pct = mtd.get("percent_of_budget", 0.0)
     budget = snapshot.get("monthly_budget_usd", 0.0)
-    n_resources = len({r["resource"] for r in mtd.get("by_resource", [])
-                       if r.get("billed_cost_usd", 0) > 0})
+    months = group_by_month(billed_rows)
+    month_keys = sorted(months.keys())
+    payloads = {ym: build_month_payload(months[ym], budget) for ym in month_keys}
+    roster, snap_estimated = build_roster(snapshot)
 
     return {
         "resource_group": snapshot.get("resource_group", ""),
         "generated_at": snapshot.get("generated_at", ""),
-        "billed": billed,
-        "estimated": estimated,
-        "pct": pct,
         "budget": budget,
-        "over": billed > budget,
-        "gap": billed - estimated,
-        "n_resources": n_resources,
-        "fig_stacked": _fig_html(stacked_bar_figure(billed_rows), "fig-stacked"),
-        "fig_daily": _fig_html(daily_line_figure(daily, budget), "fig-daily"),
-        "fig_cumulative": _fig_html(cumulative_line_figure(daily, budget), "fig-cumulative"),
-        "fig_per_resource": _fig_html(per_resource_daily_figure(billed_rows), "fig-per-resource"),
+        "budget_str": f"{budget:,.0f}",
+        "months_json": _json_for_script(payloads),
+        "month_keys_json": _json_for_script(month_keys),
+        "roster_json": _json_for_script(roster),
+        "snap_estimated_json": _json_for_script(snap_estimated),
+        "budget_json": json.dumps(budget),
     }

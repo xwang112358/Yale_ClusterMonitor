@@ -3,6 +3,61 @@
 One-time guide to add the Azure Usage view (`/azure`) to the already-deployed
 Misha Monitor on `root@159.223.173.141`. Companion to [upgrade.md](upgrade.md).
 
+---
+
+## Update 2026-06 — month navigation, multi-month history, AIServices + new-resource visibility
+
+The `/azure` view was redesigned and the data pipeline extended. **Apply this to the
+already-running droplet** (the original rollout below is for a fresh install).
+
+**What changed**
+- `azure_dashboard.py` + `templates/azure.html`: Year/Month button navigation. The page
+  opens on the **current month in US Eastern time** and auto-rolls on the 1st; click any
+  past month to read it. A **Tracked resources** table now lists *every* discovered
+  resource, including idle/brand-new ones with no billed spend (flagged NEW/IDLE) — these
+  used to silently drop out of the billing charts. Month switching is client-side
+  (`Plotly.react`), so figures for every month are embedded in one page.
+- `usage_monitor.py` (data pipeline, **lives in `~/azure-usage-monitor/`, not in this repo**):
+  1. Discovers `Microsoft.CognitiveServices/accounts/projects` children (Azure AI Foundry),
+     labelled `<child> (project)`.
+  2. Normalizes legacy OpenAI metrics *and* the AIServices vocabulary
+     (`InputTokens`/`OutputTokens`/`ModelRequests`) into canonical buckets — fixes AIServices
+     accounts reporting 0 tokens.
+  3. Pulls billing over a rolling window (`BILLING_LOOKBACK_MONTHS`, default 2) instead of
+     MonthToDate, so past months persist in `billed_costs`. `--backfill [N]` does a deep
+     one-time fill (default 12 months; the Custom timeframe is auto-clamped to <1 year, an
+     Azure hard limit).
+
+**The SQLite schema is unchanged** — the existing droplet `usage.db` is forward-compatible.
+`billed_costs` just accumulates more months; `metric_points` stores canonical bucket names
+going forward (the dashboard doesn't read it). No migration needed.
+
+**Deploy steps**
+
+```bash
+ssh root@159.223.173.141
+
+# 1) Flask app: new view + template
+sudo -u monitor bash -lc 'cd ~/ClusterMonitor && git pull --ff-only'
+systemctl restart misha-monitor
+
+# 2) Data pipeline: copy the updated usage_monitor.py into ~/azure-usage-monitor/
+#    (from your laptop, since it is not in the Flask repo):
+#    scp D:\xwang\summer26\monitor\usage_monitor.py monitor@159.223.173.141:/home/monitor/azure-usage-monitor/usage_monitor.py
+
+# 3) One-time backfill so past months show up in the new nav (honors 429 retry):
+sudo -u monitor bash -lc 'cd ~/azure-usage-monitor && ~/ClusterMonitor/.venv/bin/python usage_monitor.py --backfill 12'
+```
+
+The 4-hour timer then keeps the rolling 2-month window fresh automatically — no timer
+change required. Verify at `https://mishamonitor.duckdns.org/azure`: the Year/Month bar
+should show every month with data, defaulting to the current month.
+
+> **Plotly version**: the template loads `plotly-2.35.2.min.js` from CDN and uses
+> `Plotly.react`/`Plotly.purge` (both present in 2.x). No pip change needed for the view.
+
+---
+
 ## What this adds
 
 | Piece | Path |
