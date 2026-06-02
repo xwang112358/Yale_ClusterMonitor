@@ -44,8 +44,10 @@ ssh root@159.223.173.141
 sudo -u monitor bash -lc 'cd ~/ClusterMonitor && git pull --ff-only'
 systemctl restart misha-monitor          # Flask /azure view
 
-# 2) Sync the pipeline files from the repo into the runtime dir (keeps .env + usage.db there)
-sudo -u monitor cp ~/ClusterMonitor/usage_monitor.py ~/ClusterMonitor/rates.json ~/azure-usage-monitor/
+# 2) Sync the pipeline files from the repo into the runtime dir (keeps .env + usage.db there).
+#    Use absolute paths: a bare `sudo -u monitor cp ~/...` expands `~` in ROOT's shell
+#    (-> /root) before sudo switches user, which fails. Absolute paths avoid that.
+sudo -u monitor cp /home/monitor/ClusterMonitor/usage_monitor.py /home/monitor/ClusterMonitor/rates.json /home/monitor/azure-usage-monitor/
 
 # 3) One-time backfill so past months show up in the new nav (honors 429 retry):
 sudo -u monitor bash -lc 'cd ~/azure-usage-monitor && ~/ClusterMonitor/.venv/bin/python usage_monitor.py --backfill 12'
