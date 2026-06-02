@@ -17,7 +17,10 @@ already-running droplet** (the original rollout below is for a fresh install).
   resource, including idle/brand-new ones with no billed spend (flagged NEW/IDLE) — these
   used to silently drop out of the billing charts. Month switching is client-side
   (`Plotly.react`), so figures for every month are embedded in one page.
-- `usage_monitor.py` (data pipeline, **lives in `~/azure-usage-monitor/`, not in this repo**):
+- `usage_monitor.py` (data pipeline) — **now lives in this repo** (committed alongside
+  `dashboard.py` and `rates.json`) so it is version-controlled. It still **runs** from the
+  separate `~/azure-usage-monitor/` directory, where the secret-bearing `.env` (0600) and
+  `usage.db` stay — git is the source of truth, runtime secrets stay isolated. Changes:
   1. Discovers `Microsoft.CognitiveServices/accounts/projects` children (Azure AI Foundry),
      labelled `<child> (project)`.
   2. Normalizes legacy OpenAI metrics *and* the AIServices vocabulary
@@ -32,18 +35,17 @@ already-running droplet** (the original rollout below is for a fresh install).
 `billed_costs` just accumulates more months; `metric_points` stores canonical bucket names
 going forward (the dashboard doesn't read it). No migration needed.
 
-**Deploy steps**
+**Deploy steps** (the pipeline script now ships via `git pull`, no `scp`):
 
 ```bash
 ssh root@159.223.173.141
 
-# 1) Flask app: new view + template
+# 1) Pull the repo (gets the new view, template, AND the updated pipeline files)
 sudo -u monitor bash -lc 'cd ~/ClusterMonitor && git pull --ff-only'
-systemctl restart misha-monitor
+systemctl restart misha-monitor          # Flask /azure view
 
-# 2) Data pipeline: copy the updated usage_monitor.py into ~/azure-usage-monitor/
-#    (from your laptop, since it is not in the Flask repo):
-#    scp D:\xwang\summer26\monitor\usage_monitor.py monitor@159.223.173.141:/home/monitor/azure-usage-monitor/usage_monitor.py
+# 2) Sync the pipeline files from the repo into the runtime dir (keeps .env + usage.db there)
+sudo -u monitor cp ~/ClusterMonitor/usage_monitor.py ~/ClusterMonitor/rates.json ~/azure-usage-monitor/
 
 # 3) One-time backfill so past months show up in the new nav (honors 429 retry):
 sudo -u monitor bash -lc 'cd ~/azure-usage-monitor && ~/ClusterMonitor/.venv/bin/python usage_monitor.py --backfill 12'
@@ -52,6 +54,13 @@ sudo -u monitor bash -lc 'cd ~/azure-usage-monitor && ~/ClusterMonitor/.venv/bin
 The 4-hour timer then keeps the rolling 2-month window fresh automatically — no timer
 change required. Verify at `https://mishamonitor.duckdns.org/azure`: the Year/Month bar
 should show every month with data, defaulting to the current month.
+
+> **Optional (never copy again):** instead of step 2's `cp`, point the timer at the repo
+> copy directly so future `git pull`s are enough. `systemctl edit azure-usage-monitor` and
+> set `ExecStart=` (blank it first) to
+> `/home/monitor/ClusterMonitor/.venv/bin/python /home/monitor/ClusterMonitor/usage_monitor.py`,
+> keeping `WorkingDirectory=/home/monitor/azure-usage-monitor` so `.env`/`rates.json`/`usage.db`
+> still resolve there. Then `systemctl daemon-reload`.
 
 > **Plotly version**: the template loads `plotly-2.35.2.min.js` from CDN and uses
 > `Plotly.react`/`Plotly.purge` (both present in 2.x). No pip change needed for the view.

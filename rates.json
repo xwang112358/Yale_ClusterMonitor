@@ -1,0 +1,18 @@
+{
+  "_comment": "USD per 1M tokens. Update from https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/  Match against deployment name (longest substring wins, case-insensitive). Prices below are approximate as of early 2026; verify before relying on them.",
+  "gpt-5-nano": {"input": 0.05, "output": 0.40},
+  "gpt-5-mini": {"input": 0.25, "output": 2.00},
+  "gpt-5": {"input": 1.25, "output": 10.00},
+  "gpt-4o-mini": {"input": 0.15, "output": 0.60},
+  "gpt-4o": {"input": 2.50, "output": 10.00},
+  "gpt-4-turbo": {"input": 10.00, "output": 30.00},
+  "gpt-4": {"input": 30.00, "output": 60.00},
+  "gpt-35-turbo": {"input": 0.50, "output": 1.50},
+  "o4-mini": {"input": 1.10, "output": 4.40},
+  "o3-mini": {"input": 1.10, "output": 4.40},
+  "o3": {"input": 2.00, "output": 8.00},
+  "text-embedding-3-large": {"input": 0.13, "output": 0.0},
+  "text-embedding-3-small": {"input": 0.02, "output": 0.0},
+  "text-embedding-ada-002": {"input": 0.10, "output": 0.0},
+  "_fallback": {"input": 1.00, "output": 3.00}
+}
