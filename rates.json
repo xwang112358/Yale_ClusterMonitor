@@ -1,18 +1,49 @@
 {
-  "_comment": "USD per 1M tokens. Update from https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/  Match against deployment name (longest substring wins, case-insensitive). Prices below are approximate as of early 2026; verify before relying on them.",
-  "gpt-5-nano": {"input": 0.05, "output": 0.40},
+  "_comment": "USD per 1M tokens, GLOBAL standard (non-cached, non-priority, non-batch) input/output. Matched against the DEPLOYMENT NAME (longest substring wins, case-insensitive). Cached/priority/batch/data-zone and audio/image/video rates are NOT modeled here, and ProcessedPromptTokens counts all prompt tokens at the full input rate (no cache discount) — so the estimate is a DIAGNOSTIC; billed $ from Cost Management is authoritative. gpt-5.4 uses the <272k-context tier. Source: Azure OpenAI Service pricing, 2026-06.",
+
+  "gpt-5.5-pro": {"input": 10.00, "output": 45.00},
+  "gpt-5.5": {"input": 5.00, "output": 30.00},
+
+  "gpt-5.4-pro": {"input": 30.00, "output": 180.00},
+  "gpt-5.4-mini": {"input": 0.75, "output": 4.50},
+  "gpt-5.4-nano": {"input": 0.20, "output": 1.25},
+  "gpt-5.4": {"input": 2.50, "output": 15.00},
+
+  "gpt-5.3": {"input": 1.75, "output": 14.00},
+  "gpt-5.2": {"input": 1.75, "output": 14.00},
+
+  "gpt-5.1-codex-mini": {"input": 0.25, "output": 2.00},
+  "gpt-5.1": {"input": 1.25, "output": 10.00},
+
+  "gpt-5-pro": {"input": 15.00, "output": 120.00},
   "gpt-5-mini": {"input": 0.25, "output": 2.00},
+  "gpt-5-nano": {"input": 0.05, "output": 0.40},
   "gpt-5": {"input": 1.25, "output": 10.00},
+
+  "o3-deep-research": {"input": 10.00, "output": 40.00},
+  "o4-mini": {"input": 1.10, "output": 4.40},
+  "o3-mini": {"input": 1.10, "output": 4.40},
+  "o3": {"input": 2.00, "output": 8.00},
+  "o1-mini": {"input": 1.10, "output": 4.40},
+  "o1": {"input": 15.00, "output": 60.00},
+
+  "gpt-4.5": {"input": 75.00, "output": 150.00},
+  "gpt-4.1-nano": {"input": 0.10, "output": 0.40},
+  "gpt-4.1-mini": {"input": 0.40, "output": 1.60},
+  "gpt-4.1": {"input": 2.00, "output": 8.00},
+
   "gpt-4o-mini": {"input": 0.15, "output": 0.60},
   "gpt-4o": {"input": 2.50, "output": 10.00},
   "gpt-4-turbo": {"input": 10.00, "output": 30.00},
   "gpt-4": {"input": 30.00, "output": 60.00},
   "gpt-35-turbo": {"input": 0.50, "output": 1.50},
-  "o4-mini": {"input": 1.10, "output": 4.40},
-  "o3-mini": {"input": 1.10, "output": 4.40},
-  "o3": {"input": 2.00, "output": 8.00},
+
+  "gpt-oss-120b": {"input": 0.15, "output": 0.60},
+  "computer-use-preview": {"input": 3.00, "output": 12.00},
+
   "text-embedding-3-large": {"input": 0.13, "output": 0.0},
   "text-embedding-3-small": {"input": 0.02, "output": 0.0},
   "text-embedding-ada-002": {"input": 0.10, "output": 0.0},
+
   "_fallback": {"input": 1.00, "output": 3.00}
 }
