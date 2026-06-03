@@ -511,6 +511,15 @@ def main(lookback_months: int = BILLING_LOOKBACK_MONTHS):
     meter_totals = {}         # meter -> cost (across whole RG)
     billed_source = "live"    # "live" | "cache" — surfaced in the snapshot
     current_ym = end.strftime("%Y-%m")  # snapshot headline is current-month-only
+    # Cost Management lowercases resource names in its ResourceIds, while
+    # discovery/metrics preserve the created casing. Reconcile billing onto the
+    # created casing so a resource isn't split into two snapshot rows
+    # (e.g. belo2-yhf from billing vs BELO2-YHF from metrics).
+    canonical = {name.lower(): name for name, _ in accounts}
+
+    def _canon(n):
+        return canonical.get(n.lower(), n)
+
     try:
         log.info("Querying Cost Management for billed cost (lookback %d month(s))...",
                  lookback_months)
@@ -529,9 +538,10 @@ def main(lookback_months: int = BILLING_LOOKBACK_MONTHS):
             # ...but the snapshot headline only aggregates the current month.
             if r["usage_date"][:7] != current_ym:
                 continue
+            rname = _canon(r["resource_name"])
             billed_total += r["cost_usd"]
-            billed_by_resource[r["resource_name"]] = billed_by_resource.get(r["resource_name"], 0.0) + r["cost_usd"]
-            key = (r["resource_name"], r["meter"])
+            billed_by_resource[rname] = billed_by_resource.get(rname, 0.0) + r["cost_usd"]
+            key = (rname, r["meter"])
             billed_by_meter[key] = billed_by_meter.get(key, 0.0) + r["cost_usd"]
             meter_totals[r["meter"]] = meter_totals.get(r["meter"], 0.0) + r["cost_usd"]
     except HttpResponseError as e:
@@ -546,9 +556,10 @@ def main(lookback_months: int = BILLING_LOOKBACK_MONTHS):
         ).fetchall()
         log.info("  %d cached billed-cost rows from SQLite", len(rows))
         for resource_name, meter, cost in rows:
+            rname = _canon(resource_name)
             billed_total += cost
-            billed_by_resource[resource_name] = billed_by_resource.get(resource_name, 0.0) + cost
-            billed_by_meter[(resource_name, meter)] = billed_by_meter.get((resource_name, meter), 0.0) + cost
+            billed_by_resource[rname] = billed_by_resource.get(rname, 0.0) + cost
+            billed_by_meter[(rname, meter)] = billed_by_meter.get((rname, meter), 0.0) + cost
             meter_totals[meter] = meter_totals.get(meter, 0.0) + cost
 
     # Merge billed cost into each resource summary; also include resources that

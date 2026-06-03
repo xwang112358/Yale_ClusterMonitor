@@ -413,14 +413,21 @@ def fig_json(fig):
     return json.loads(fig.to_json()) if fig is not None else None
 
 
-def build_month_payload(ym, rows, budget):
+def build_month_payload(ym, rows, budget, canonical=None):
     """Per-month billing payload: KPIs, figures, and a billed-by-resource table.
 
     The 'live roster' (all currently discovered resources, including idle/new
     ones with no spend) is embedded separately and merged client-side onto
     whichever month is current in US Eastern time, so surfacing new resources is
     decoupled from the UTC vs ET month boundary.
+
+    `canonical` maps lower-cased name -> created casing. Cost Management
+    lowercases resource names while discovery/metrics keep the created casing;
+    folding billing onto the created casing stops a resource splitting into two
+    rows (e.g. belo2-yhf vs BELO2-YHF).
     """
+    if canonical:
+        rows = [(d, canonical.get(rn.lower(), rn), m, c) for (d, rn, m, c) in rows]
     daily_map = defaultdict(float)
     res_billed = defaultdict(float)
     for usage_date, rn, _m, cost in rows:
@@ -730,17 +737,19 @@ function monthName(key) {
 // past month we just list whatever was billed that month.
 function buildResourceRows(key, data) {
   const isLive = (key === etMonth());
-  const rows = {};
+  const rows = {};   // keyed by lower-cased name so casing variants collapse to one row
   (data ? data.resources : []).forEach(r => {
-    rows[r.name] = {name: r.name, billed: r.billed, est: null, tokens: null,
-                    calls: null, idle: r.idle};
+    rows[r.name.toLowerCase()] = {name: r.name, billed: r.billed, est: null,
+                                  tokens: null, calls: null, idle: r.idle};
   });
   if (isLive) {
     ROSTER.forEach(r => {
-      const ex = rows[r.name] || {name: r.name, billed: 0, idle: true};
+      const k = r.name.toLowerCase();
+      const ex = rows[k] || {name: r.name, billed: 0, idle: true};
+      ex.name = r.name;            // prefer the created casing from discovery
       ex.est = r.est; ex.tokens = r.tokens; ex.calls = r.calls;
       ex.idle = (ex.billed === 0);
-      rows[r.name] = ex;
+      rows[k] = ex;
     });
   }
   return Object.values(rows).sort((a, b) =>
@@ -853,8 +862,9 @@ def render(snapshot, billed_rows):
     months = group_by_month(billed_rows)
     month_keys = sorted(months.keys())
 
-    payloads = {ym: build_month_payload(ym, months[ym], budget) for ym in month_keys}
     roster, snap_estimated = build_roster(snapshot)
+    canonical = {r["name"].lower(): r["name"] for r in roster}
+    payloads = {ym: build_month_payload(ym, months[ym], budget, canonical) for ym in month_keys}
 
     html = PAGE
     repl = {

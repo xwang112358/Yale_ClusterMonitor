@@ -390,17 +390,19 @@ function monthName(key) {
 
 function buildResourceRows(key, data) {
   const isLive = (key === etMonth());
-  const rows = {};
+  const rows = {};   // keyed by lower-cased name so casing variants collapse to one row
   (data ? data.resources : []).forEach(r => {
-    rows[r.name] = {name: r.name, billed: r.billed, est: null, tokens: null,
-                    calls: null, idle: r.idle};
+    rows[r.name.toLowerCase()] = {name: r.name, billed: r.billed, est: null,
+                                  tokens: null, calls: null, idle: r.idle};
   });
   if (isLive) {
     ROSTER.forEach(r => {
-      const ex = rows[r.name] || {name: r.name, billed: 0, idle: true};
+      const k = r.name.toLowerCase();
+      const ex = rows[k] || {name: r.name, billed: 0, idle: true};
+      ex.name = r.name;            // prefer the created casing from discovery
       ex.est = r.est; ex.tokens = r.tokens; ex.calls = r.calls;
       ex.idle = (ex.billed === 0);
-      rows[r.name] = ex;
+      rows[k] = ex;
     });
   }
   return Object.values(rows).sort((a, b) =>

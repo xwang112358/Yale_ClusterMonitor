@@ -369,7 +369,13 @@ def group_by_month(billed_rows):
     return months
 
 
-def build_month_payload(rows, budget):
+def build_month_payload(rows, budget, canonical=None):
+    # Cost Management lowercases resource names while discovery/metrics keep the
+    # created casing. Fold billing onto the created casing so a resource isn't
+    # split into two rows (e.g. belo2-yhf vs BELO2-YHF). `canonical` maps
+    # lower-cased name -> created casing.
+    if canonical:
+        rows = [(d, canonical.get(rn.lower(), rn), m, c) for (d, rn, m, c) in rows]
     daily_map = defaultdict(float)
     res_billed = defaultdict(float)
     for usage_date, rn, _m, cost in rows:
@@ -445,8 +451,9 @@ def build_context(db_path=None):
     budget = snapshot.get("monthly_budget_usd", 0.0)
     months = group_by_month(billed_rows)
     month_keys = sorted(months.keys())
-    payloads = {ym: build_month_payload(months[ym], budget) for ym in month_keys}
     roster, snap_estimated = build_roster(snapshot)
+    canonical = {r["name"].lower(): r["name"] for r in roster}
+    payloads = {ym: build_month_payload(months[ym], budget, canonical) for ym in month_keys}
 
     return {
         "resource_group": snapshot.get("resource_group", ""),
