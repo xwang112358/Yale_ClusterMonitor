@@ -1,0 +1,17 @@
+# /etc/systemd/system/azure-usage-metrics.timer
+#
+# Runs azure-usage-metrics.service every 30 minutes (token metrics / estimate).
+# Complements azure-usage-monitor.timer, which does the full run (metrics + Cost
+# Management) every 4h. Net: estimate refreshes ~30 min, billed every 4h, and the
+# Cost Management call rate is unchanged.
+
+[Unit]
+Description=Run Azure token-metrics refresh every 30 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

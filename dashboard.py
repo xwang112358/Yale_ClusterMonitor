@@ -587,9 +587,11 @@ PAGE = r"""<!DOCTYPE html>
         a budget bump, or a 429/quota error.</li>
     <li><b>Billed vs estimated:</b> "Billed" is the authoritative invoiced figure from Cost
         Management, but it <b>lags actual token usage by ~8&ndash;24h</b> &mdash; so early in the
-        month, or right after heavy use, it under-reports. The <b>token-based estimate updates in
-        near-real-time</b> from Azure Monitor metrics (current month only), so <b>check the estimate
-        first</b> for a live read on spend; treat billed as the final word once it catches up.</li>
+        month, or right after heavy use, it under-reports. The <b>token-based estimate</b> refreshes
+        every <b style="color:var(--red)">~30&nbsp;min</b> from Azure Monitor metrics (current month
+        only), while <b>billed</b> updates every <b style="color:var(--red)">4h</b> &mdash; so
+        <b>check the estimate first</b> for a live read on spend, and treat billed as the final word
+        once it catches up.</li>
   </ul>
 </div>
 

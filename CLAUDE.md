@@ -47,8 +47,11 @@ Host `cluster-monitor` = `root@159.223.173.141`, served at `https://mishamonitor
   (gunicorn on `127.0.0.1:5111`, `User=monitor`); Caddy reverse-proxies with TLS. A `systemctl`
   drop-in sets `AZURE_USAGE_DB=/home/monitor/azure-usage-monitor/usage.db`.
 - `/home/monitor/azure-usage-monitor/` — the pipeline at runtime: `usage_monitor.py`, `rates.json`,
-  `.env` (0600), `usage.db`. Run by `azure-usage-monitor.timer` **every 4h** — the ONLY thing that
-  calls Cost Management.
+  `.env` (0600), `usage.db`. **Two timers** (units in `deploy/`):
+  - `azure-usage-monitor.timer` (**4h**) → full run (metrics + Cost Management). The ONLY thing that
+    calls Cost Management.
+  - `azure-usage-metrics.timer` (**30 min**) → `usage_monitor.py --metrics-only`: refreshes token
+    metrics / the estimate, skips Cost Management (replays cached `billed_costs` so Billed never drops).
 - Shared venv: `/home/monitor/ClusterMonitor/.venv` (used by both the app and the pipeline).
 
 ### Deploy (push → pull; full version in DEPLOY_AZURE.md)

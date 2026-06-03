@@ -67,6 +67,24 @@ should show every month with data, defaulting to the current month.
 > **Plotly version**: the template loads `plotly-2.35.2.min.js` from CDN and uses
 > `Plotly.react`/`Plotly.purge` (both present in 2.x). No pip change needed for the view.
 
+### Frequent token-metrics timer (added 2026-06-03)
+
+Token metrics (Azure Monitor) aren't rate-limited like Cost Management, so the estimate is
+refreshed every **30 min** by a second timer, while Cost Management stays on the **4h** full run.
+`usage_monitor.py --metrics-only` does a metrics-only pass (skips Cost Management; replays cached
+`billed_costs`). One-time install on the droplet (units are version-controlled in `deploy/`):
+
+```bash
+ssh root@159.223.173.141
+cp /home/monitor/ClusterMonitor/deploy/azure-usage-metrics.service \
+   /home/monitor/ClusterMonitor/deploy/azure-usage-metrics.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now azure-usage-metrics.timer
+systemctl list-timers 'azure-usage-*' --no-pager      # confirm both timers
+```
+
+Cost Management call rate is unchanged (still only the 4h timer) — no added 429 risk.
+
 ---
 
 ## What this adds

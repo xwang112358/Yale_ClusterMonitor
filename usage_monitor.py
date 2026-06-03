@@ -448,8 +448,9 @@ def build_resource_summary(resource_name: str, points: list, rates: dict) -> dic
 # ---------------------------------------------------------------------------
 
 
-def main(lookback_months: int = BILLING_LOOKBACK_MONTHS):
-    log.info("Polling usage for resource group %s", RESOURCE_GROUP)
+def main(lookback_months: int = BILLING_LOOKBACK_MONTHS, query_cost: bool = True):
+    log.info("Polling usage for resource group %s%s", RESOURCE_GROUP,
+             "" if query_cost else " (metrics-only)")
 
     credential = make_credential()
     metrics_client = MetricsQueryClient(credential)
@@ -520,47 +521,63 @@ def main(lookback_months: int = BILLING_LOOKBACK_MONTHS):
     def _canon(n):
         return canonical.get(n.lower(), n)
 
-    try:
-        log.info("Querying Cost Management for billed cost (lookback %d month(s))...",
-                 lookback_months)
-        cost_rows = query_cost_management(credential, SUBSCRIPTION_ID, RESOURCE_GROUP,
-                                          lookback_months=lookback_months)
-        log.info("  %d billed-cost rows", len(cost_rows))
-        for r in cost_rows:
-            # Persist every row (all months) so past-month history accumulates...
-            conn.execute(
-                "INSERT OR REPLACE INTO billed_costs "
-                "(usage_date, resource_id, resource_name, meter, cost_usd, currency) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (r["usage_date"], r["resource_id"], r["resource_name"],
-                 r["meter"], r["cost_usd"], r["currency"]),
-            )
-            # ...but the snapshot headline only aggregates the current month.
-            if r["usage_date"][:7] != current_ym:
-                continue
-            rname = _canon(r["resource_name"])
-            billed_total += r["cost_usd"]
-            billed_by_resource[rname] = billed_by_resource.get(rname, 0.0) + r["cost_usd"]
-            key = (rname, r["meter"])
-            billed_by_meter[key] = billed_by_meter.get(key, 0.0) + r["cost_usd"]
-            meter_totals[r["meter"]] = meter_totals.get(r["meter"], 0.0) + r["cost_usd"]
-    except HttpResponseError as e:
-        # Don't blow away the last-known-good snapshot. Replay the most recent
-        # billed_costs rows for the current month from SQLite so the dashboard
-        # keeps showing yesterday's reality instead of $0.
-        log.warning("Cost Management query failed (%s) — falling back to cached billed_costs", e.message or e)
-        billed_source = "cache"
+    def _replay_cached_billing():
+        """Aggregate the current month's cached billed_costs rows into the billing
+        dicts. Used on a --metrics-only run and as the Cost Management 429 fallback,
+        so the dashboard keeps showing the last-known billed $ instead of $0."""
         rows = conn.execute(
             "SELECT resource_name, meter, cost_usd FROM billed_costs "
             "WHERE usage_date >= date('now', 'start of month')"
         ).fetchall()
         log.info("  %d cached billed-cost rows from SQLite", len(rows))
+        tot = 0.0
         for resource_name, meter, cost in rows:
             rname = _canon(resource_name)
-            billed_total += cost
+            tot += cost
             billed_by_resource[rname] = billed_by_resource.get(rname, 0.0) + cost
             billed_by_meter[(rname, meter)] = billed_by_meter.get((rname, meter), 0.0) + cost
             meter_totals[meter] = meter_totals.get(meter, 0.0) + cost
+        return tot
+
+    if not query_cost:
+        # Metrics-only run (the frequent 30-min timer): refresh tokens/estimate
+        # without touching the rate-limited Cost Management API; billed $ comes
+        # from the cache (the 4h full run keeps it fresh).
+        log.info("Metrics-only run — skipping Cost Management; billed from cache")
+        billed_source = "cache"
+        billed_total += _replay_cached_billing()
+    else:
+        try:
+            log.info("Querying Cost Management for billed cost (lookback %d month(s))...",
+                     lookback_months)
+            cost_rows = query_cost_management(credential, SUBSCRIPTION_ID, RESOURCE_GROUP,
+                                              lookback_months=lookback_months)
+            log.info("  %d billed-cost rows", len(cost_rows))
+            for r in cost_rows:
+                # Persist every row (all months) so past-month history accumulates...
+                conn.execute(
+                    "INSERT OR REPLACE INTO billed_costs "
+                    "(usage_date, resource_id, resource_name, meter, cost_usd, currency) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (r["usage_date"], r["resource_id"], r["resource_name"],
+                     r["meter"], r["cost_usd"], r["currency"]),
+                )
+                # ...but the snapshot headline only aggregates the current month.
+                if r["usage_date"][:7] != current_ym:
+                    continue
+                rname = _canon(r["resource_name"])
+                billed_total += r["cost_usd"]
+                billed_by_resource[rname] = billed_by_resource.get(rname, 0.0) + r["cost_usd"]
+                key = (rname, r["meter"])
+                billed_by_meter[key] = billed_by_meter.get(key, 0.0) + r["cost_usd"]
+                meter_totals[r["meter"]] = meter_totals.get(r["meter"], 0.0) + r["cost_usd"]
+        except HttpResponseError as e:
+            # Don't blow away the last-known-good snapshot. Replay the most recent
+            # billed_costs rows for the current month from SQLite so the dashboard
+            # keeps showing yesterday's reality instead of $0.
+            log.warning("Cost Management query failed (%s) — falling back to cached billed_costs", e.message or e)
+            billed_source = "cache"
+            billed_total += _replay_cached_billing()
 
     # Merge billed cost into each resource summary; also include resources that
     # only show up in billing (e.g., no token metrics yet).
@@ -619,6 +636,11 @@ def main(lookback_months: int = BILLING_LOOKBACK_MONTHS):
         "INSERT OR REPLACE INTO snapshots (snapshot_time, payload_json) VALUES (?, ?)",
         (end.isoformat(), json.dumps(snapshot)),
     )
+    # Bound the snapshots table — the metrics-only timer now writes one every ~30 min.
+    conn.execute(
+        "DELETE FROM snapshots WHERE snapshot_time NOT IN "
+        "(SELECT snapshot_time FROM snapshots ORDER BY snapshot_time DESC LIMIT 1000)"
+    )
     conn.commit()
     conn.close()
 
@@ -635,6 +657,11 @@ if __name__ == "__main__":
     # the small rolling window (BILLING_LOOKBACK_MONTHS) to stay light on the
     # Cost Management rate limit.
     months = BILLING_LOOKBACK_MONTHS
+    query_cost = True
+    if "--metrics-only" in sys.argv:
+        # Frequent (30-min) refresh of token metrics / estimate; skips the
+        # rate-limited Cost Management query — billed $ comes from cache.
+        query_cost = False
     if "--backfill" in sys.argv:
         i = sys.argv.index("--backfill")
         if i + 1 < len(sys.argv) and sys.argv[i + 1].isdigit():
@@ -642,4 +669,4 @@ if __name__ == "__main__":
         else:
             months = 12  # ~1 year; the query clamps the span to < 365 days
         log.info("Backfill mode: pulling %d months of billing history", months)
-    main(lookback_months=months)
+    main(lookback_months=months, query_cost=query_cost)
