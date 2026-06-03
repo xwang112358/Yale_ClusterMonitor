@@ -245,8 +245,11 @@
       want to raise the monthly budget, or hit a 429 / quota error you can't explain.
     </li>
     <li>
-      <b>Billed vs estimated:</b> &ldquo;billed&rdquo; is the real invoiced number from Azure Cost
-      Management. The token-based estimate is a diagnostic only and is current-month-only.
+      <b>Billed vs estimated:</b> &ldquo;Billed&rdquo; is the authoritative invoiced figure from
+      Azure Cost Management, but it <b>lags actual token usage by ~8&ndash;24h</b> &mdash; so early
+      in the month, or right after heavy use, it under-reports. The <b>token-based estimate updates
+      in near-real-time</b> from Azure Monitor metrics (current month only), so <b>check the estimate
+      first</b> for a live read on spend; treat billed as the final word once it catches up.
     </li>
   </ul>
 </div>

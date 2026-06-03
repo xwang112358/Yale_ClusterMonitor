@@ -585,8 +585,11 @@ PAGE = r"""<!DOCTYPE html>
     <li><b>Who to contact:</b> ping <a href="mailto:allen.wang.xw532@yale.edu">Allen Wang</a> or
         <a href="mailto:hyunjae.kim@yale.edu">Hyunjae Kim</a> about unexpected spend, a new deployment/key,
         a budget bump, or a 429/quota error.</li>
-    <li><b>Billed vs estimated:</b> "billed" is the real invoiced number from Cost Management; the
-        token-based estimate is a diagnostic only and is current-month-only.</li>
+    <li><b>Billed vs estimated:</b> "Billed" is the authoritative invoiced figure from Cost
+        Management, but it <b>lags actual token usage by ~8&ndash;24h</b> &mdash; so early in the
+        month, or right after heavy use, it under-reports. The <b>token-based estimate updates in
+        near-real-time</b> from Azure Monitor metrics (current month only), so <b>check the estimate
+        first</b> for a live read on spend; treat billed as the final word once it catches up.</li>
   </ul>
 </div>
 
