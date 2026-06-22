@@ -141,6 +141,41 @@
   .gpu-chip .gnum .free { color: var(--green); font-weight: 600; }
   .gpu-chip .gsub { font-size: 0.65rem; color: var(--text-dim); margin-top: 4px; }
 
+  /* "Grab a card" controls on each GPU chip */
+  .grab { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--card-border); }
+  .grab-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .grab-row select, .grab-adv input[type="number"] {
+    background: var(--card-soft); color: var(--text);
+    border: 1px solid var(--card-border); border-radius: 4px;
+    padding: 2px 4px; font-family: inherit; font-size: 0.7rem;
+  }
+  .grab-row .grab-copy {
+    background: var(--card-soft); color: var(--text);
+    border: 1px solid var(--card-border); border-radius: 4px;
+    padding: 3px 10px; font-family: inherit; font-size: 0.7rem;
+    cursor: pointer; flex: 1; transition: background 0.1s, color 0.1s;
+  }
+  .grab-row .grab-copy:hover { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .grab-row .grab-copy.copied { background: var(--green); color: #0b3a10; border-color: var(--green); }
+  .grab-row .grab-more {
+    background: transparent; color: var(--text-dim);
+    border: 1px solid var(--card-border); border-radius: 4px;
+    padding: 2px 6px; cursor: pointer; font-family: inherit; font-size: 0.72rem;
+  }
+  .grab-row .grab-more:hover { color: var(--accent); border-color: var(--accent); }
+  .grab-adv {
+    display: none; flex-wrap: wrap; gap: 8px; margin-top: 6px;
+    font-size: 0.66rem; color: var(--text-dim); align-items: center;
+  }
+  .grab-adv.show { display: flex; }
+  .grab-adv label { display: flex; align-items: center; gap: 4px; }
+  .grab-adv input[type="number"] { width: 48px; }
+  .grab-cmd {
+    margin-top: 6px; font-family: 'SF Mono','Cascadia Code','Consolas',monospace;
+    font-size: 0.64rem; color: var(--text); background: var(--card-soft);
+    border-radius: 4px; padding: 4px 6px; overflow-x: auto; white-space: nowrap;
+  }
+
   /* Bar */
   .bar-wrap {
     height: 6px;
@@ -444,6 +479,8 @@
 const REFRESH_MS = 30000;
 const ME = {{ user|tojson }};
 const LAB_NETIDS_INIT = {{ ((lab_account and []) or [])|tojson }};
+const PARTITIONS = {{ partitions|tojson }};
+const PARTITIONS_STR = PARTITIONS.join(",");
 let LAB_NETIDS = [];
 let LAST = null;
 
@@ -520,17 +557,111 @@ function renderGpuSummary(summary) {
     const soonest = (free === 0 && s.soonest_free_at)
       ? `<div class="gsub" style="color:var(--accent);">next free in ${fmtRelative(s.soonest_free_at) || '?'}</div>`
       : '';
-    return `<div class="gpu-chip">
+    const noFree = (free === 0);
+    return `<div class="gpu-chip" data-type="${s.type}">
       <div class="gtype">${s.type}</div>
       <div class="gnum"><span class="free">${free}</span> free <span style="color:var(--text-dim);">/ ${s.total}</span></div>
       <div class="bar-wrap"><div class="bar-fill ${fillClass(p)}" style="width:${p.toFixed(1)}%"></div></div>
       <div class="gsub">${s.alloc} alloc &middot; ${s.nodes_with_free}/${s.nodes_total} nodes have free GPUs</div>
       ${soonest}
+      <div class="grab">
+        <div class="grab-row">
+          <select class="grab-n" title="# GPUs">
+            <option>1</option><option>2</option><option>4</option><option>8</option>
+          </select>
+          <select class="grab-t" title="walltime">
+            <option value="01:00:00">1h</option>
+            <option value="02:00:00" selected>2h</option>
+            <option value="04:00:00">4h</option>
+            <option value="08:00:00">8h</option>
+            <option value="24:00:00">24h</option>
+          </select>
+          <button class="grab-copy" title="Copy salloc command">&#x29C9; salloc</button>
+          <button class="grab-more" title="More options">&hellip;</button>
+        </div>
+        <div class="grab-adv">
+          <label>CPU <input type="number" class="grab-c" value="8" min="1" max="64" step="1"></label>
+          <label>Mem <input type="number" class="grab-m" value="64" min="1" max="512" step="4">G</label>
+          <label><input type="checkbox" class="grab-srun"> srun --pty bash</label>
+        </div>
+        <div class="grab-cmd"></div>
+      </div>
     </div>`;
   }).join('');
+  updateGrabPreviews();
   document.getElementById('gpu-summary-meta').textContent =
     `${totalAll - totalAlloc} GPUs free / ${totalAll} total`;
 }
+
+// gpu_devel is A40-only on Misha (≤6h, ≤4 cpu, ≤32G mem, ≤1 GPU).
+// For A40 we list both partitions so SLURM grabs whichever frees first;
+// other GPU types only exist in `gpu`.
+function partitionFor(gtype) {
+  const t = (gtype || "").toLowerCase();
+  if (t === "a40" && PARTITIONS.includes("gpu_devel")) return "gpu,gpu_devel";
+  return PARTITIONS.includes("gpu") ? "gpu" : PARTITIONS_STR;
+}
+
+function grabCommand(chip) {
+  const gtype = chip.dataset.type;
+  const n = chip.querySelector('.grab-n').value;
+  const t = chip.querySelector('.grab-t').value;
+  const c = chip.querySelector('.grab-c').value;
+  const m = chip.querySelector('.grab-m').value;
+  const srun = chip.querySelector('.grab-srun').checked;
+  const part = partitionFor(gtype);
+  const base = `-p ${part} --gpus=${gtype}:${n} -c ${c} --mem=${m}G -t ${t}`;
+  return srun ? `srun ${base} --pty bash` : `salloc ${base}`;
+}
+
+function updateGrabPreviews() {
+  document.querySelectorAll('#gpu-summary .gpu-chip').forEach(chip => {
+    const preview = chip.querySelector('.grab-cmd');
+    if (preview) preview.textContent = grabCommand(chip);
+    const copyBtn = chip.querySelector('.grab-copy');
+    if (copyBtn) {
+      const srun = chip.querySelector('.grab-srun').checked;
+      copyBtn.innerHTML = (srun ? '&#x29C9; srun' : '&#x29C9; salloc');
+    }
+  });
+}
+
+async function copyGrab(chip) {
+  const cmd = grabCommand(chip);
+  const btn = chip.querySelector('.grab-copy');
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(cmd);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = cmd; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+    }
+    const prev = btn.innerHTML;
+    btn.classList.add('copied');
+    btn.innerHTML = '&#x2713; copied';
+    setTimeout(() => { btn.classList.remove('copied'); btn.innerHTML = prev; }, 1200);
+  } catch (e) {
+    btn.innerHTML = '&#x2717; copy failed';
+  }
+}
+
+document.getElementById('gpu-summary').addEventListener('click', (e) => {
+  const chip = e.target.closest('.gpu-chip');
+  if (!chip) return;
+  if (e.target.closest('.grab-copy')) { copyGrab(chip); return; }
+  if (e.target.closest('.grab-more')) {
+    chip.querySelector('.grab-adv').classList.toggle('show');
+  }
+});
+document.getElementById('gpu-summary').addEventListener('input', (e) => {
+  const chip = e.target.closest('.gpu-chip');
+  if (chip) updateGrabPreviews();
+});
+document.getElementById('gpu-summary').addEventListener('change', (e) => {
+  const chip = e.target.closest('.gpu-chip');
+  if (chip) updateGrabPreviews();
+});
 
 function nodeCardHtml(n, i) {
   const cpuP = pct(n.cpu_alloc, n.cpu_total);
