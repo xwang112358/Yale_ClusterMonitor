@@ -479,7 +479,10 @@
 const REFRESH_MS = 30000;
 const ME = {{ user|tojson }};
 const LAB_NETIDS_INIT = {{ ((lab_account and []) or [])|tojson }};
-const PARTITIONS = {{ partitions|tojson }};
+const _PARTITIONS_RAW = {{ partitions|tojson }};
+const PARTITIONS = Array.isArray(_PARTITIONS_RAW)
+  ? _PARTITIONS_RAW
+  : String(_PARTITIONS_RAW).split(",").map(s => s.trim()).filter(Boolean);
 const PARTITIONS_STR = PARTITIONS.join(",");
 let LAB_NETIDS = [];
 let LAST = null;
