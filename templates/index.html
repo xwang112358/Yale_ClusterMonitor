@@ -560,24 +560,23 @@ function renderGpuSummary(summary) {
     const soonest = (free === 0 && s.soonest_free_at)
       ? `<div class="gsub" style="color:var(--accent);">next free in ${fmtRelative(s.soonest_free_at) || '?'}</div>`
       : '';
-    const noFree = (free === 0);
-    return `<div class="gpu-chip" data-type="${s.type}">
-      <div class="gtype">${s.type}</div>
-      <div class="gnum"><span class="free">${free}</span> free <span style="color:var(--text-dim);">/ ${s.total}</span></div>
-      <div class="bar-wrap"><div class="bar-fill ${fillClass(p)}" style="width:${p.toFixed(1)}%"></div></div>
-      <div class="gsub">${s.alloc} alloc &middot; ${s.nodes_with_free}/${s.nodes_total} nodes have free GPUs</div>
-      ${soonest}
+    // Only the high-end cards (A100/H100/H200) get the salloc helper —
+    // they're the cards people scramble for. L40S/A40 are abundant enough
+    // that users typically just `salloc` by hand.
+    const grabbable = ["h100", "h200", "a100"].includes((s.type || "").toLowerCase());
+    const grab = grabbable ? `
       <div class="grab">
         <div class="grab-row">
           <select class="grab-n" title="# GPUs">
             <option>1</option><option>2</option><option>4</option><option>8</option>
           </select>
-          <select class="grab-t" title="walltime">
+          <select class="grab-t" title="walltime (gpu partition cap: 2 days)">
             <option value="01:00:00">1h</option>
             <option value="02:00:00" selected>2h</option>
             <option value="04:00:00">4h</option>
             <option value="08:00:00">8h</option>
-            <option value="24:00:00">24h</option>
+            <option value="24:00:00">1d</option>
+            <option value="48:00:00">2d</option>
           </select>
           <button class="grab-copy" title="Copy salloc command">&#x29C9; salloc</button>
           <button class="grab-more" title="More options">&hellip;</button>
@@ -588,7 +587,14 @@ function renderGpuSummary(summary) {
           <label><input type="checkbox" class="grab-srun"> srun --pty bash</label>
         </div>
         <div class="grab-cmd"></div>
-      </div>
+      </div>` : '';
+    return `<div class="gpu-chip" data-type="${s.type}">
+      <div class="gtype">${s.type}</div>
+      <div class="gnum"><span class="free">${free}</span> free <span style="color:var(--text-dim);">/ ${s.total}</span></div>
+      <div class="bar-wrap"><div class="bar-fill ${fillClass(p)}" style="width:${p.toFixed(1)}%"></div></div>
+      <div class="gsub">${s.alloc} alloc &middot; ${s.nodes_with_free}/${s.nodes_total} nodes have free GPUs</div>
+      ${soonest}
+      ${grab}
     </div>`;
   }).join('');
   updateGrabPreviews();
