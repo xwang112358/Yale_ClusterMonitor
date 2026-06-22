@@ -443,29 +443,34 @@ def build_resource_summary(resource_name: str, points: list, rates: dict) -> dic
     }
 
 
-def _points_from_db(conn, resource_name: str):
-    """Replay cached metric_points for a resource over the current month.
+def _last_known_summary_for_removed(conn, resource_name: str):
+    """Return the most recent snapshot's by_resource entry for a now-removed resource.
 
-    Used as a fallback for resources that show up in this month's
-    billed_costs but are no longer in RG discovery (deleted / moved out).
-    Returns the same (ts, metric, dep, value) tuple shape that
-    query_resource_metrics returns, so build_resource_summary can consume it.
+    Used as a fallback for resources that show up in this month's billed_costs
+    but are no longer in RG discovery (deleted / moved out). The snapshot's
+    cached entry captures the *live* MTD numbers as of the last successful
+    discovery — accurate, single-counted, and unlike the persisted
+    metric_points table not corrupted by overlapping 35-day query windows.
+    Returns None if no past snapshot had this resource in the current month.
     """
     now = datetime.now(timezone.utc)
-    start_iso = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    current_ym = now.strftime("%Y-%m")
     rows = conn.execute(
-        "SELECT timestamp, metric_name, deployment, value FROM metric_points "
-        "WHERE lower(resource_name) = lower(?) AND timestamp >= ?",
-        (resource_name, start_iso),
+        "SELECT payload_json FROM snapshots ORDER BY snapshot_time DESC LIMIT 200"
     ).fetchall()
-    points = []
-    for ts_str, metric, dep, value in rows:
+    for (pj,) in rows:
         try:
-            ts = datetime.fromisoformat(ts_str)
-        except ValueError:
+            payload = json.loads(pj)
+        except Exception:
             continue
-        points.append((ts, metric, dep, value))
-    return points
+        if not (payload.get("generated_at", "") or "").startswith(current_ym):
+            continue
+        for entry in payload.get("month_to_date", {}).get("by_resource", []):
+            if entry.get("resource", "").lower() != resource_name.lower():
+                continue
+            if (entry.get("total_tokens") or 0) > 0 or (entry.get("calls") or 0) > 0:
+                return entry
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -614,14 +619,22 @@ def main(lookback_months: int = BILLING_LOOKBACK_MONTHS, query_cost: bool = True
     for name in billed_by_resource:
         if name.lower() in known_names_lc:
             continue
-        cached = _points_from_db(conn, name)
-        if cached:
-            summary = build_resource_summary(name, cached, rates)
-            summary["status"] = "removed"  # surfaced in the dashboard roster
-            log.info("Recovered %d cached metric points for removed resource %s "
-                     "(est $%.2f from %d tokens)",
-                     len(cached), name, summary["estimated_cost_usd"],
-                     summary["total_tokens"])
+        last = _last_known_summary_for_removed(conn, name)
+        if last:
+            # Freeze the last-known live summary in place; mark "removed" so the
+            # dashboard can flag it.
+            summary = {
+                "resource": last.get("resource", name),
+                "estimated_cost_usd": float(last.get("estimated_cost_usd", 0.0)),
+                "total_tokens": int(last.get("total_tokens", 0)),
+                "calls": int(last.get("calls", 0)),
+                "by_deployment": last.get("by_deployment", []),
+                "status": "removed",
+            }
+            log.info("Froze last-known live summary for removed resource %s "
+                     "(est $%.2f, %d tokens, %d calls)",
+                     name, summary["estimated_cost_usd"],
+                     summary["total_tokens"], summary["calls"])
             resource_summaries.append(summary)
             estimated_total += summary["estimated_cost_usd"]
         else:
