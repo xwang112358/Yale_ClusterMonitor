@@ -443,6 +443,31 @@ def build_resource_summary(resource_name: str, points: list, rates: dict) -> dic
     }
 
 
+def _points_from_db(conn, resource_name: str):
+    """Replay cached metric_points for a resource over the current month.
+
+    Used as a fallback for resources that show up in this month's
+    billed_costs but are no longer in RG discovery (deleted / moved out).
+    Returns the same (ts, metric, dep, value) tuple shape that
+    query_resource_metrics returns, so build_resource_summary can consume it.
+    """
+    now = datetime.now(timezone.utc)
+    start_iso = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    rows = conn.execute(
+        "SELECT timestamp, metric_name, deployment, value FROM metric_points "
+        "WHERE lower(resource_name) = lower(?) AND timestamp >= ?",
+        (resource_name, start_iso),
+    ).fetchall()
+    points = []
+    for ts_str, metric, dep, value in rows:
+        try:
+            ts = datetime.fromisoformat(ts_str)
+        except ValueError:
+            continue
+        points.append((ts, metric, dep, value))
+    return points
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -580,10 +605,26 @@ def main(lookback_months: int = BILLING_LOOKBACK_MONTHS, query_cost: bool = True
             billed_total += _replay_cached_billing()
 
     # Merge billed cost into each resource summary; also include resources that
-    # only show up in billing (e.g., no token metrics yet).
-    known_names = {s["resource"] for s in resource_summaries}
+    # only show up in billing (e.g., no token metrics yet OR — for deleted /
+    # moved-out resources — no longer in RG discovery). For the latter, replay
+    # the persisted metric_points so the dashboard can still attribute the
+    # pre-deletion token spend; otherwise the headline estimate undercounts
+    # billed by exactly the missing-resource $.
+    known_names_lc = {s["resource"].lower() for s in resource_summaries}
     for name in billed_by_resource:
-        if name not in known_names:
+        if name.lower() in known_names_lc:
+            continue
+        cached = _points_from_db(conn, name)
+        if cached:
+            summary = build_resource_summary(name, cached, rates)
+            summary["status"] = "removed"  # surfaced in the dashboard roster
+            log.info("Recovered %d cached metric points for removed resource %s "
+                     "(est $%.2f from %d tokens)",
+                     len(cached), name, summary["estimated_cost_usd"],
+                     summary["total_tokens"])
+            resource_summaries.append(summary)
+            estimated_total += summary["estimated_cost_usd"]
+        else:
             resource_summaries.append({
                 "resource": name,
                 "estimated_cost_usd": 0.0,

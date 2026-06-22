@@ -173,6 +173,7 @@
   .badge { font-size: 0.58rem; padding: 1px 6px; border-radius: 8px; letter-spacing: 0.6px; margin-left: 8px; }
   .badge.new { color: var(--yellow); border: 1px solid var(--yellow); }
   .badge.idle { color: var(--text-dim); border: 1px solid var(--card-border); }
+  .badge.removed { color: var(--red); border: 1px solid var(--red); }
   .dim { color: var(--text-dim); }
 
   .empty { padding: 28px 14px; color: var(--text-dim); font-size: 0.82rem; text-align: center; }
@@ -410,6 +411,7 @@ function buildResourceRows(key, data) {
       const ex = rows[k] || {name: r.name, billed: 0, idle: true};
       ex.name = r.name;            // prefer the created casing from discovery
       ex.est = r.est; ex.tokens = r.tokens; ex.calls = r.calls;
+      ex.status = r.status;        // "removed" = billed in this month but no longer in RG
       ex.idle = (ex.billed === 0);
       rows[k] = ex;
     });
@@ -462,7 +464,7 @@ function renderMonth(key) {
   document.getElementById('kpi-res-sub').textContent =
       rows.length ? (nBilling + " billing · " + nIdle + " idle/new") : "no resources";
   document.getElementById('res-table-hint').textContent = isLive
-      ? "every resource discovered in the group · NEW = no spend yet · IDLE = has calls, no bill"
+      ? "every resource discovered in the group · NEW = no spend yet · IDLE = has calls, no bill · REMOVED = billed this month but no longer in RG"
       : "resources billed in " + monthName(key);
 
   const tb = document.getElementById('res-tbody');
@@ -473,8 +475,12 @@ function renderMonth(key) {
   }
   rows.forEach(r => {
     let badge = "";
-    if (r.idle) badge = (r.calls ? '<span class="badge idle">IDLE</span>'
-                                 : '<span class="badge new">NEW</span>');
+    if (r.status === "removed") {
+      badge = '<span class="badge removed" title="no longer in RG — estimate replayed from cached metrics">REMOVED</span>';
+    } else if (r.idle) {
+      badge = r.calls ? '<span class="badge idle">IDLE</span>'
+                      : '<span class="badge new">NEW</span>';
+    }
     const tr = document.createElement('tr');
     tr.innerHTML =
       '<td>' + r.name + badge + '</td>' +

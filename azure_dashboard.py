@@ -413,6 +413,7 @@ def build_roster(snapshot):
             "est": r.get("estimated_cost_usd"),
             "tokens": r.get("total_tokens"),
             "calls": r.get("calls"),
+            "status": r.get("status"),  # "removed" for resources no longer in RG
         })
     return roster, mtd.get("estimated_cost_usd")
 
