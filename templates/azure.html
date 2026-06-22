@@ -232,33 +232,24 @@
       data for.
     </li>
     <li>
-      <b>Data latency:</b> numbers come from Azure Cost Management and lag the real world by
-      roughly <b>8&ndash;24 hours</b>. A freshly created resource shows up under
-      <b>Tracked resources</b> (flagged NEW) before it has any billed spend &mdash; don't panic if
-      it reads $0.
+      <b>Billed vs estimate:</b> <i>Billed</i> (Cost Management) is the invoiced figure &mdash;
+      authoritative, but <b>lags 8&ndash;24h</b>; refreshes every <b style="color:var(--red)">4h</b>.
+      <i>Estimate</i> (Azure Monitor token metrics, current month only) is near-live; refreshes
+      every <b style="color:var(--red)">~30&nbsp;min</b>. Use the estimate while billed catches up;
+      new resources show under <b>Tracked resources</b> flagged NEW before any spend.
     </li>
     <li>
       <b>Who to contact:</b> ping
       <a href="mailto:allen.wang.xw532@yale.edu">Allen Wang</a> or
       <a href="mailto:hyunjae.kim@yale.edu">Hyunjae Kim</a>
-      if you see unexpected spend on your resource, need a new deployment / key,
-      want to raise the monthly budget, or hit a 429 / quota error you can't explain.
-    </li>
-    <li>
-      <b>Billed vs estimated:</b> &ldquo;Billed&rdquo; is the authoritative invoiced figure from
-      Azure Cost Management, but it <b>lags actual token usage by ~8&ndash;24h</b> &mdash; so early
-      in the month, or right after heavy use, it under-reports. The <b>token-based estimate</b>
-      refreshes every <b style="color:var(--red)">~30&nbsp;min</b> from Azure Monitor metrics
-      (current month only), while <b>billed</b> updates every <b style="color:var(--red)">4h</b>
-      &mdash; so <b>check the estimate first</b> for a live read on spend, and treat billed as the
-      final word once it catches up.
+      for unexpected spend, new deployments / keys, budget bumps, or an unexplained 429.
     </li>
   </ul>
 </div>
 
 <div class="kpi-strip">
   <div class="kpi"><div class="label">Billed <span id="kpi-period" class="dim"></span></div>
-    <div id="kpi-billed" class="value">&mdash;</div><div class="sub">real invoiced (Cost Management)</div></div>
+    <div id="kpi-billed" class="value">&mdash;</div><div id="kpi-billed-sub" class="sub">&mdash;</div></div>
   <div class="kpi"><div class="label">Monthly budget</div>
     <div class="value">${{ ctx.budget_str }}</div><div id="kpi-pct" class="sub">&mdash;</div></div>
   <div class="kpi"><div class="label">Token-based estimate</div>
@@ -302,6 +293,8 @@ const MONTH_KEYS = {{ ctx.month_keys_json | safe }};   // sorted ascending
 const BUDGET = {{ ctx.budget_json | safe }};
 const ROSTER = {{ ctx.roster_json | safe }};           // all currently discovered resources
 const SNAP_ESTIMATED = {{ ctx.snap_estimated_json | safe }};
+const BILLED_REFRESHED_AT = {{ ctx.billed_refreshed_at|tojson }};
+const ESTIMATE_REFRESHED_AT = {{ ctx.generated_at|tojson }};
 const MLAB = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const PLOT_CFG = {displaylogo:false, responsive:true, modeBarButtonsToRemove:["lasso2d","select2d"]};
 const FIGS = ["stacked","daily","cumulative","per_resource"];
@@ -319,6 +312,17 @@ function etMonth() {
 
 function fmtMoney(v) { return "$" + Number(v).toLocaleString('en-US',{minimumFractionDigits:2, maximumFractionDigits:2}); }
 function fmtInt(v) { return Number(v).toLocaleString('en-US'); }
+function fmtUpdated(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "—";
+  const mm = String(d.getMonth() + 1).padStart(2,'0');
+  const dd = String(d.getDate()).padStart(2,'0');
+  const yy = String(d.getFullYear()).slice(-2);
+  const HH = String(d.getHours()).padStart(2,'0');
+  const MM = String(d.getMinutes()).padStart(2,'0');
+  return mm + "/" + dd + "/" + yy + " " + HH + ":" + MM;
+}
 
 function years() {
   const ys = new Set(MONTH_KEYS.map(k => k.slice(0,4)));
@@ -430,14 +434,18 @@ function renderMonth(key) {
   const bEl = document.getElementById('kpi-billed');
   bEl.textContent = fmtMoney(billed);
   bEl.className = "value " + (over ? "over" : "ok");
+  document.getElementById('kpi-billed-sub').textContent =
+      "updated " + fmtUpdated(BILLED_REFRESHED_AT);
   const pctEl = document.getElementById('kpi-pct');
   pctEl.textContent = pct.toFixed(1) + "% used";
   pctEl.style.color = over ? "var(--red)" : "var(--green)";
 
   const est = isLive ? SNAP_ESTIMATED : null;
   document.getElementById('kpi-est').textContent = (est == null) ? "—" : fmtMoney(est);
+  const estUpdated = "updated " + fmtUpdated(ESTIMATE_REFRESHED_AT);
   document.getElementById('kpi-est-sub').textContent = (est == null)
-      ? "current month only" : "gap vs billed: " + fmtMoney(billed - est);
+      ? estUpdated + " · current month only"
+      : estUpdated + " · gap vs billed " + fmtMoney(billed - est);
 
   FIGS.forEach(f => {
     const divId = "fig-" + (f === "per_resource" ? "per-resource" : f);

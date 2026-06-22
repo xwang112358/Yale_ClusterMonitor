@@ -446,6 +446,24 @@ def build_context(db_path=None):
         ORDER BY usage_date
         """
     ).fetchall()
+
+    # When the last refresh was the 30-min metrics-only timer, snapshot.generated_at
+    # reflects the estimate refresh — but billed $ came from cached billed_costs and
+    # hasn't actually moved. Walk back through recent snapshots to find the most
+    # recent one that queried Cost Management "live", and use *its* generated_at as
+    # the billed refresh time.
+    billed_refreshed_at = snapshot.get("generated_at", "")
+    if snapshot.get("month_to_date", {}).get("billed_source") != "live":
+        for (pj,) in conn.execute(
+            "SELECT payload_json FROM snapshots ORDER BY snapshot_time DESC LIMIT 60"
+        ).fetchall():
+            try:
+                p = json.loads(pj)
+            except Exception:
+                continue
+            if p.get("month_to_date", {}).get("billed_source") == "live":
+                billed_refreshed_at = p.get("generated_at", "") or billed_refreshed_at
+                break
     conn.close()
 
     budget = snapshot.get("monthly_budget_usd", 0.0)
@@ -458,6 +476,7 @@ def build_context(db_path=None):
     return {
         "resource_group": snapshot.get("resource_group", ""),
         "generated_at": snapshot.get("generated_at", ""),
+        "billed_refreshed_at": billed_refreshed_at,
         "budget": budget,
         "budget_str": f"{budget:,.0f}",
         "months_json": _json_for_script(payloads),
