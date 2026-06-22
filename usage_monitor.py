@@ -123,7 +123,44 @@ def init_db(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.executescript(SCHEMA)
     conn.commit()
+    _migrate_metric_points_dedup(conn)
     return conn
+
+
+def _migrate_metric_points_dedup(conn: sqlite3.Connection) -> None:
+    """One-time: collapse minute-stamped metric_points rows into day buckets.
+
+    Earlier versions of `_query_one_metric` stored `dp.timestamp` verbatim,
+    which carries the query's wall-clock minute (e.g. T14:12:00) rather than
+    the daily bucket start. Every 30-min re-query then wrote a new PRIMARY
+    KEY row for the same logical day, accumulating hundreds of duplicates
+    per (resource, metric, deployment, day) and inflating any aggregate
+    SUM by ~500×. Collapse them now via MAX(value) — which for cumulative
+    daily totals is the latest/most-complete reading — keyed to the
+    day-start timestamp the new code writes.
+    """
+    dup_count = conn.execute(
+        "SELECT COUNT(*) FROM metric_points "
+        "WHERE timestamp NOT LIKE '%T00:00:00+00:00'"
+    ).fetchone()[0]
+    if dup_count == 0:
+        return
+    log.info("Migrating %d minute-stamped metric_points rows into day buckets",
+             dup_count)
+    conn.execute(
+        "INSERT OR REPLACE INTO metric_points "
+        "(timestamp, resource_name, metric_name, deployment, value) "
+        "SELECT substr(timestamp, 1, 10) || 'T00:00:00+00:00', "
+        "       resource_name, metric_name, deployment, MAX(value) "
+        "FROM metric_points "
+        "WHERE timestamp NOT LIKE '%T00:00:00+00:00' "
+        "GROUP BY substr(timestamp, 1, 10), resource_name, metric_name, deployment"
+    )
+    deleted = conn.execute(
+        "DELETE FROM metric_points WHERE timestamp NOT LIKE '%T00:00:00+00:00'"
+    ).rowcount
+    conn.commit()
+    log.info("Migration: deleted %d duplicate rows", deleted)
 
 
 # ---------------------------------------------------------------------------
@@ -364,7 +401,16 @@ def _query_one_metric(client, resource_id, metric_name, start, end):
                             break
                 for dp in ts.data:
                     if dp.total is not None:
-                        out.append((dp.timestamp, dep, float(dp.total)))
+                        # Azure returns dp.timestamp with the query's wall-clock
+                        # minute (e.g. 14:12:00) instead of snapping to the daily
+                        # bucket start, even when granularity=days. Without this
+                        # snap, every 30-min re-query writes a new PRIMARY KEY row
+                        # for the same logical day, accumulating hundreds of
+                        # duplicates per day and inflating any later aggregation.
+                        day_start = dp.timestamp.replace(
+                            hour=0, minute=0, second=0, microsecond=0
+                        )
+                        out.append((day_start, dep, float(dp.total)))
         return out
     return None
 
