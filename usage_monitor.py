@@ -455,8 +455,10 @@ def _last_known_summary_for_removed(conn, resource_name: str):
     """
     now = datetime.now(timezone.utc)
     current_ym = now.strftime("%Y-%m")
+    # Scan the full snapshot ring (cleanup bounds it at 1000 rows ≈ last ~3 weeks at
+    # the 30-min cadence) so we can recover even resources removed >5 days ago.
     rows = conn.execute(
-        "SELECT payload_json FROM snapshots ORDER BY snapshot_time DESC LIMIT 200"
+        "SELECT payload_json FROM snapshots ORDER BY snapshot_time DESC LIMIT 1000"
     ).fetchall()
     for (pj,) in rows:
         try:
@@ -467,6 +469,11 @@ def _last_known_summary_for_removed(conn, resource_name: str):
             continue
         for entry in payload.get("month_to_date", {}).get("by_resource", []):
             if entry.get("resource", "").lower() != resource_name.lower():
+                continue
+            # Skip recovered/frozen entries (any prior run that already used
+            # this code path) — we want the original live-queried snapshot,
+            # not a possibly-corrupted recovery of one.
+            if entry.get("status") == "removed":
                 continue
             if (entry.get("total_tokens") or 0) > 0 or (entry.get("calls") or 0) > 0:
                 return entry
