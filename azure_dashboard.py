@@ -39,6 +39,17 @@ ACCENT = "#6c8cff"
 GREEN = "#4caf50"
 RED = "#f44336"
 
+# Page and chart text scale. The HTML sets the same multiplier on the root
+# font-size (all CSS sizes are rem), so this keeps Plotly's px fonts in step;
+# change both together or the charts drift out of proportion with the page.
+FONT_SCALE = 2.0
+
+
+def fs(px):
+    """Scale a Plotly font size by FONT_SCALE."""
+    return int(round(px * FONT_SCALE))
+
+
 FAMILY_COLORS = {
     "gpt-5.4": "#7c3aed", "gpt-5.3": "#9333ea", "gpt-5.2": "#a855f7", "gpt-5": "#c084fc",
     "gpt-4o": "#2563eb", "gpt-4-turbo": "#3b82f6", "gpt-4": "#60a5fa",
@@ -233,7 +244,7 @@ def _base_layout(extra=None):
         paper_bgcolor=CARD,
         plot_bgcolor=CARD,
         font=dict(family="SF Mono, Cascadia Code, Consolas, monospace",
-                  color=TEXT, size=12),
+                  color=TEXT, size=fs(12)),
         margin=dict(l=10, r=20, t=10, b=40),
         hoverlabel=dict(bgcolor=CARD_SOFT, bordercolor=CARD_BORDER,
                         font=dict(family="SF Mono, monospace", color=TEXT)),
@@ -307,7 +318,7 @@ def stacked_bar_figure(billed_rows, saas_labels=None):
         yaxis=dict(gridcolor=CARD_BORDER, automargin=True),
         legend=dict(orientation="h", yanchor="bottom", y=1.02,
                     xanchor="right", x=1, bgcolor="rgba(0,0,0,0)",
-                    font=dict(color=TEXT, size=11)),
+                    font=dict(color=TEXT, size=fs(11))),
         height=max(360, 34 * len(resources_sorted) + 90),
     )))
     return fig
@@ -359,7 +370,7 @@ def daily_and_cumulative_figure(daily, budget):
         fig.add_hline(y=budget, line=dict(color=RED, dash="dash", width=1.5),
                       annotation_text=f"monthly budget ${budget:,.0f}",
                       annotation_position="top left",
-                      annotation_font=dict(color=RED, size=10))
+                      annotation_font=dict(color=RED, size=fs(10)))
         crossed = next((i for i, v in enumerate(cum) if v >= budget), None)
         if crossed is not None:
             fig.add_trace(go.Scatter(
@@ -381,11 +392,11 @@ def daily_and_cumulative_figure(daily, budget):
         yaxis=dict(title="USD", tickprefix="$", tickformat=",.0f",
                    gridcolor=CARD_BORDER, zerolinecolor=CARD_BORDER, rangemode="tozero"),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-                    bgcolor="rgba(0,0,0,0)", font=dict(color=TEXT, size=11)),
+                    bgcolor="rgba(0,0,0,0)", font=dict(color=TEXT, size=fs(11))),
         height=360,
         margin=dict(t=64),
         annotations=[dict(text=sub, x=0, y=1.13, xref="paper", yref="paper",
-                          showarrow=False, font=dict(color=TEXT_DIM, size=11),
+                          showarrow=False, font=dict(color=TEXT_DIM, size=fs(11)),
                           xanchor="left")],
     )))
     return fig
@@ -474,7 +485,7 @@ def per_resource_daily_figure(billed_rows, saas_labels=None):
                 {"annotations": [dict(
                     text=f"<b>{r}</b>  ·  ${total:,.2f}",
                     showarrow=False, x=0, y=1.18, xref="paper", yref="paper",
-                    font=dict(color=TEXT, size=13), align="left", xanchor="left",
+                    font=dict(color=TEXT, size=fs(13)), align="left", xanchor="left",
                 )]},
             ],
         ))
@@ -492,19 +503,19 @@ def per_resource_daily_figure(billed_rows, saas_labels=None):
         showlegend=True,
         legend=dict(orientation="h", yanchor="top", y=-0.15,
                     xanchor="center", x=0.5, bgcolor="rgba(0,0,0,0)",
-                    font=dict(color=TEXT, size=11)),
+                    font=dict(color=TEXT, size=fs(11))),
         height=420,
         updatemenus=[dict(
             buttons=buttons, direction="down",
             x=1, xanchor="right", y=1.22, yanchor="top",
             bgcolor=CARD_SOFT, bordercolor=CARD_BORDER,
-            font=dict(color=TEXT, size=11), showactive=True,
+            font=dict(color=TEXT, size=fs(11)), showactive=True,
             pad=dict(l=8, r=8, t=4, b=4),
         )],
         annotations=[dict(
             text=f"<b>{first_r}</b>  ·  ${first_total:,.2f}",
             showarrow=False, x=0, y=1.18, xref="paper", yref="paper",
-            font=dict(color=TEXT, size=13), align="left", xanchor="left",
+            font=dict(color=TEXT, size=fs(13)), align="left", xanchor="left",
         )],
     )))
     return fig

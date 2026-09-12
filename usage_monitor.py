@@ -566,24 +566,39 @@ def query_resource_metrics(client, resource_id, start, end):
     """Returns: list of (timestamp_dt, canonical_bucket, deployment, value).
 
     Resolves each canonical bucket (prompt_tokens / completion_tokens /
-    total_tokens / calls) against the legacy and AIServices metric vocabularies,
-    picking the first supported candidate that carries data so resources exposing
-    both vocabularies aren't double-counted.
+    total_tokens / calls) against the legacy and AIServices metric vocabularies.
+
+    The two vocabularies are resolved PER DEPLOYMENT, not per account. A Foundry
+    account routinely hosts both kinds at once: its OpenAI deployments report
+    ProcessedPromptTokens/GeneratedTokens while its Anthropic (and other
+    marketplace) deployments report only InputTokens/OutputTokens. Stopping at
+    the first vocabulary that carried *any* data silently dropped every Claude
+    token, because the legacy metric answered first for the GPT deployments --
+    which is how a resource could bill $86 and estimate $9.
+
+    Deployments are still claimed by the first vocabulary that reports them, so
+    a deployment appearing under both (gpt-4o reports identical values to
+    ProcessedPromptTokens and InputTokens) is never counted twice.
     """
     points = []
     for bucket, candidates in METRIC_BUCKETS:
-        best = None  # (ts, dep, value) list from the chosen candidate
+        claimed = set()      # deployments already taken by an earlier vocabulary
+        zero_fallback = None  # supported but all-zero, used only if nothing lands
         for cand in candidates:
             res = _query_one_metric(client, resource_id, cand, start, end)
             if res is None:
                 continue  # unsupported for this resource type — try next vocab
-            if any(v for _, _, v in res):
-                best = res  # has real data — prefer it and stop
-                break
-            if best is None:
-                best = res  # supported but all-zero — keep only as fallback
-        if best is not None:
-            for ts, dep, val in best:
+            fresh = {dep for _ts, dep, val in res if val} - claimed
+            if not fresh:
+                if zero_fallback is None:
+                    zero_fallback = res
+                continue
+            for ts, dep, val in res:
+                if dep in fresh:
+                    points.append((ts, bucket, dep, val))
+            claimed |= fresh
+        if not claimed and zero_fallback is not None:
+            for ts, dep, val in zero_fallback:
                 points.append((ts, bucket, dep, val))
     return points
 

@@ -116,6 +116,22 @@ Non-interactive ssh: `ssh -o BatchMode=yes -o ConnectTimeout=12 root@159.223.173
   the whole budget.
 - Keep `dashboard.py` in sync with `azure_dashboard.py` — it deliberately duplicates the
   resolver and palette (it must stay standalone for the pipeline dir).
+- **Resolve the two metric vocabularies PER DEPLOYMENT, not per account.** A Foundry
+  account hosts both kinds at once: its OpenAI deployments report `ProcessedPromptTokens`/
+  `GeneratedTokens`, its Anthropic/marketplace deployments report ONLY `InputTokens`/
+  `OutputTokens`. `query_resource_metrics()` used to stop at the first vocabulary carrying
+  *any* data — the legacy metric answered for the GPT deployments, so every Claude token was
+  silently dropped and the estimate read $9 against $86 billed. Deployments are claimed by
+  the first vocabulary that reports them (gpt-4o reports identical values under both, so it
+  is never double-counted). Do not "optimise" this back into a per-account choice.
+- **The token estimate under-reads Claude.** With rates and metrics correct,
+  claude-sonnet-4-5 estimates to the cent ($3.74 = $3.74) but claude-sonnet-4-6 came in at
+  $41.56 against $77.02 billed (~1.85x). Most likely adaptive-thinking tokens are billed as
+  output but absent from Azure's `OutputTokens` metric. The estimate is a DIAGNOSTIC —
+  billed $ from Cost Management is authoritative. Don't paper over it with a fudge factor.
+- **Claude rates are Anthropic list rates.** Foundry bills in Claude Consumption Units
+  ($0.01/CCU) but rates tokens at standard per-model rates, so `rates.json` uses the
+  published $/MTok unchanged (platform.claude.com/docs/en/about-claude/pricing).
 - **Resource-name casing.** Cost Management lowercases names (`belo2-yhf`); RM/metrics keep the created
   casing (`BELO2-YHF`). ALL resource-name matching must be **case-insensitive**; display prefers the
   created casing. Do not reintroduce case-sensitive `==` on resource names.
@@ -130,6 +146,10 @@ Non-interactive ssh: `ssh -o BatchMode=yes -o ConnectTimeout=12 root@159.223.173
   running sum of the bars, so a second y-scale would only let them be drawn at arbitrary
   relative heights. The $2,000 budget is an order of magnitude above a normal month, so it
   is drawn only once actually crossed; until then pace + burn live in the subtitle.
+- Text scale is ONE knob in two places that must move together: `html { font-size }`
+  in the page CSS (every CSS size is rem) and `FONT_SCALE` in
+  `azure_dashboard.py` / `dashboard.py`, which scales Plotly's px fonts via `fs()`.
+  Change one without the other and the charts drift out of proportion.
 - Model families are coloured per-hue ramps (gpt-5.x purple, gpt-4.x blue, Claude rose).
   The Claude ramp is validated as an *ordinal* ramp against the `#0f1117` surface.
 

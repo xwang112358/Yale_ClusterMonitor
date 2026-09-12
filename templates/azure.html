@@ -18,6 +18,10 @@
     --yellow: #ff9800;
     --red: #f44336;
   }
+  /* Page text scale. Every size below is in rem, so this one knob scales all of
+     them. Keep it in step with FONT_SCALE in azure_dashboard.py / dashboard.py,
+     which applies the same multiplier to Plotly's px font sizes. */
+  html { font-size: 200%; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
