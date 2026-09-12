@@ -276,8 +276,8 @@
   <span class="hint">stacked by model family &middot; hover a segment &middot; &#9711; = no billed spend yet</span></div>
 <div class="panel"><div id="fig-stacked" class="plotly-host"></div></div>
 
-<div class="section-title">Daily &amp; cumulative spend
-  <span class="hint">whole lab &middot; bars = that day &middot; line = running month total</span></div>
+<div class="section-title">Lab daily &amp; cumulative spend
+  <span class="hint">bars = that day &middot; line = running month total</span></div>
 <div class="panel"><div id="fig-daily-cumulative" class="plotly-host"></div></div>
 
 <div class="section-title">Per-resource daily trend
@@ -285,9 +285,9 @@
 <div class="panel"><div id="fig-per-resource" class="plotly-host"></div></div>
 
 <div class="section-title">Tracked resources
-  <span class="hint" id="res-table-hint">every resource discovered in the group &middot; click a resource for its models</span></div>
+  <span class="hint" id="res-table-hint">every resource discovered in the group &middot; click a resource for its models &middot; cached = prompt-cache hits</span></div>
 <div class="panel"><table class="res"><thead><tr>
-  <th>Resource</th><th>Billed $</th><th>Tokens</th><th>Calls</th>
+  <th>Resource</th><th>Billed $</th><th>Input</th><th>Output</th><th>Cached</th><th>Calls</th>
 </tr></thead><tbody id="res-tbody"></tbody></table></div>
 
 {% endif %}
@@ -466,13 +466,13 @@ function renderMonth(key) {
   document.getElementById('kpi-res-sub').textContent =
       rows.length ? (nBilling + " billing · " + nIdle + " idle/new") : "no resources";
   document.getElementById('res-table-hint').textContent = isLive
-      ? "tokens · calls per model · NEW = no spend yet · IDLE = has calls, no bill · REMOVED = billed this month but no longer in RG"
+      ? "input · output · cached tokens per model · NEW = no spend yet · IDLE = has calls, no bill · REMOVED = billed this month but no longer in RG"
       : "resources billed in " + monthName(key);
 
   const tb = document.getElementById('res-tbody');
   tb.innerHTML = "";
   if (!rows.length) {
-    tb.innerHTML = '<tr><td colspan="4" class="dim" style="text-align:center;padding:18px;">No data for this month.</td></tr>';
+    tb.innerHTML = '<tr><td colspan="6" class="dim" style="text-align:center;padding:18px;">No data for this month.</td></tr>';
     return;
   }
   rows.forEach(r => {
@@ -499,6 +499,8 @@ function renderMonth(key) {
       '<td>' + r.name + badge + toggle + '</td>' +
       '<td>' + (r.billed ? fmtMoney(r.billed) : '<span class="dim">$0.00</span>') + '</td>' +
       '<td class="dim">—</td>' +
+      '<td class="dim">—</td>' +
+      '<td class="dim">—</td>' +
       '<td class="dim">—</td>';
     tb.appendChild(tr);
     const kids = [];
@@ -509,7 +511,9 @@ function renderMonth(key) {
       mtr.innerHTML =
         '<td class="model-name">' + m.name + '</td>' +
         '<td class="dim">—</td>' +
-        '<td>' + fmtInt(m.tokens) + '</td>' +
+        '<td>' + fmtInt(m.input) + '</td>' +
+        '<td>' + fmtInt(m.output) + '</td>' +
+        '<td>' + (m.cached ? fmtInt(m.cached) : '<span class="dim">—</span>') + '</td>' +
         '<td>' + fmtInt(m.calls) + '</td>';
       tb.appendChild(mtr);
       kids.push(mtr);

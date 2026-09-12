@@ -627,21 +627,30 @@ def build_month_payload(ym, rows, budget, canonical=None, saas_labels=None):
 
 
 def _model_rows(entry):
-    """Per-model activity for a resource, biggest first.
+    """Per-model activity for a resource, biggest output first.
 
-    Drops the "(all)" pseudo-deployment (an account total, not a model) and
-    anything with no activity, so the table lists models that actually ran.
+    Reports input / output / cached separately rather than one total. Output is
+    the cost driver (5x input's price); cached reads are billed at 0.1x and sit
+    OUTSIDE TotalTokens, so a single total both hides them and understates real
+    traffic. Drops the "(all)" pseudo-deployment (an account total, not a model)
+    and anything with no activity, so the list is the models that actually ran.
     """
     out = []
     for d in entry.get("by_deployment", []) or []:
         name = d.get("deployment") or ""
         if name == "(all)" or not name:
             continue
-        tokens, calls = d.get("total_tokens") or 0, d.get("calls") or 0
-        if not (tokens or calls):
+        row = {
+            "name": name,
+            "input": d.get("prompt_tokens") or 0,
+            "output": d.get("completion_tokens") or 0,
+            "cached": d.get("cached_tokens") or 0,
+            "calls": d.get("calls") or 0,
+        }
+        if not any((row["input"], row["output"], row["cached"], row["calls"])):
             continue
-        out.append({"name": name, "tokens": tokens, "calls": calls})
-    out.sort(key=lambda m: (m["tokens"], m["calls"]), reverse=True)
+        out.append(row)
+    out.sort(key=lambda m: (m["output"], m["cached"], m["input"]), reverse=True)
     return out
 
 
@@ -675,7 +684,8 @@ def build_roster(snapshot):
             if r.get(src_key) is not None:
                 row[k] = (row.get(k) or 0) + (r.get(src_key) or 0)
         row["models"] = sorted(row.get("models", []) + _model_rows(r),
-                               key=lambda m: (m["tokens"], m["calls"]), reverse=True)
+                               key=lambda m: (m["output"], m["cached"], m["input"]),
+                               reverse=True)
     return roster
 
 
@@ -827,8 +837,8 @@ PAGE = r"""<!DOCTYPE html>
   <span class="hint">stacked by model family · hover a segment · ○ = no billed spend yet</span></div>
 <div class="panel"><div id="fig-stacked" class="plotly-host"></div></div>
 
-<div class="section-title">Daily &amp; cumulative spend
-  <span class="hint">whole lab · bars = that day · line = running month total</span></div>
+<div class="section-title">Lab daily &amp; cumulative spend
+  <span class="hint">bars = that day · line = running month total</span></div>
 <div class="panel"><div id="fig-daily-cumulative" class="plotly-host"></div></div>
 
 <div class="section-title">Per-resource daily trend
@@ -838,7 +848,7 @@ PAGE = r"""<!DOCTYPE html>
 <div class="section-title">Tracked resources
   <span class="hint" id="res-table-hint">every resource discovered in the group</span></div>
 <div class="panel"><table class="res"><thead><tr>
-  <th>Resource</th><th>Billed $</th><th>Tokens</th><th>Calls</th>
+  <th>Resource</th><th>Billed $</th><th>Input</th><th>Output</th><th>Cached</th><th>Calls</th>
 </tr></thead><tbody id="res-tbody"></tbody></table></div>
 
 <div class="footer">
@@ -966,6 +976,7 @@ function buildResourceRows(key, data) {
       const ex = rows[k] || {name: r.name, billed: 0, idle: true};
       ex.name = r.name;            // prefer the created casing from discovery
       ex.tokens = r.tokens; ex.calls = r.calls;
+      ex.models = r.models || [];   // without this the model list is never rendered
       ex.idle = (ex.billed === 0);
       rows[k] = ex;
     });
@@ -1014,7 +1025,7 @@ function renderMonth(key) {
   const tb = document.getElementById('res-tbody');
   tb.innerHTML = "";
   if (!rows.length) {
-    tb.innerHTML = '<tr><td colspan="4" class="dim" style="text-align:center;padding:18px;">No data for this month.</td></tr>';
+    tb.innerHTML = '<tr><td colspan="6" class="dim" style="text-align:center;padding:18px;">No data for this month.</td></tr>';
     return;
   }
   rows.forEach(r => {
@@ -1034,6 +1045,8 @@ function renderMonth(key) {
       '<td>' + r.name + badge + toggle + '</td>' +
       '<td>' + (r.billed ? fmtMoney(r.billed) : '<span class="dim">$0.00</span>') + '</td>' +
       '<td class="dim">—</td>' +
+      '<td class="dim">—</td>' +
+      '<td class="dim">—</td>' +
       '<td class="dim">—</td>';
     tb.appendChild(tr);
     const kids = [];
@@ -1044,7 +1057,9 @@ function renderMonth(key) {
       mtr.innerHTML =
         '<td class="model-name">' + m.name + '</td>' +
         '<td class="dim">—</td>' +
-        '<td>' + fmtInt(m.tokens) + '</td>' +
+        '<td>' + fmtInt(m.input) + '</td>' +
+        '<td>' + fmtInt(m.output) + '</td>' +
+        '<td>' + (m.cached ? fmtInt(m.cached) : '<span class="dim">—</span>') + '</td>' +
         '<td>' + fmtInt(m.calls) + '</td>';
       tb.appendChild(mtr); kids.push(mtr);
     });

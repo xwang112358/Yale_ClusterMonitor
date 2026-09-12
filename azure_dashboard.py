@@ -591,21 +591,30 @@ def build_month_payload(rows, budget, canonical=None, saas_labels=None):
 
 
 def _model_rows(entry):
-    """Per-model activity for a resource, biggest first.
+    """Per-model activity for a resource, biggest output first.
 
-    Drops the "(all)" pseudo-deployment (an account total, not a model) and
-    anything with no activity, so the table lists models that actually ran.
+    Reports input / output / cached separately rather than one total. Output is
+    the cost driver (5x input's price); cached reads are billed at 0.1x and sit
+    OUTSIDE TotalTokens, so a single total both hides them and understates real
+    traffic. Drops the "(all)" pseudo-deployment (an account total, not a model)
+    and anything with no activity, so the list is the models that actually ran.
     """
     out = []
     for d in entry.get("by_deployment", []) or []:
         name = d.get("deployment") or ""
         if name == "(all)" or not name:
             continue
-        tokens, calls = d.get("total_tokens") or 0, d.get("calls") or 0
-        if not (tokens or calls):
+        row = {
+            "name": name,
+            "input": d.get("prompt_tokens") or 0,
+            "output": d.get("completion_tokens") or 0,
+            "cached": d.get("cached_tokens") or 0,
+            "calls": d.get("calls") or 0,
+        }
+        if not any((row["input"], row["output"], row["cached"], row["calls"])):
             continue
-        out.append({"name": name, "tokens": tokens, "calls": calls})
-    out.sort(key=lambda m: (m["tokens"], m["calls"]), reverse=True)
+        out.append(row)
+    out.sort(key=lambda m: (m["output"], m["cached"], m["input"]), reverse=True)
     return out
 
 
@@ -647,7 +656,8 @@ def build_roster(snapshot):
             if r.get(src_key) is not None:
                 row[k] = (row.get(k) or 0) + (r.get(src_key) or 0)
         row["models"] = sorted(row.get("models", []) + _model_rows(r),
-                               key=lambda m: (m["tokens"], m["calls"]), reverse=True)
+                               key=lambda m: (m["output"], m["cached"], m["input"]),
+                               reverse=True)
         if not r.get("status"):
             row["status"] = None  # a live entry outranks a "removed" one
     return roster

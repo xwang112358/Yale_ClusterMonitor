@@ -65,10 +65,21 @@ DB_PATH = Path(os.environ.get("DB_PATH", "usage.db"))
 # Label _query_one_metric uses when a metric carries no deployment dimension.
 AGGREGATE_DEPLOYMENT = "(all)"
 
+# Candidates within one bucket are ALTERNATIVE vocabularies for the same quantity
+# (the first that reports a deployment claims it). Never put two metrics that are
+# genuinely ADDITIVE in one bucket -- the 5m and 1h cache writes are separate
+# quantities and get their own buckets for exactly that reason.
 METRIC_BUCKETS = [
     ("prompt_tokens",     ["ProcessedPromptTokens", "InputTokens"]),
     ("completion_tokens", ["GeneratedTokens", "OutputTokens"]),
     ("total_tokens",      ["TotalTokens"]),
+    # Prompt-cache hits, billed at 0.1x input. Excluded from TotalTokens, and on a
+    # cached workload they dwarf it (44.8M vs 2.8M on claude-sonnet-4-6), which is
+    # why the token column understated real traffic until these were collected.
+    ("cached_tokens",     ["cacheReadInputTokens"]),
+    # Cache writes, billed ABOVE normal input (1.25x / 2x). Collected but not shown.
+    ("cache_write_5m",    ["ephemeral5mInputTokens"]),
+    ("cache_write_1h",    ["ephemeral1hInputTokens"]),
     ("calls",             ["TotalCalls", "ModelRequests"]),
 ]
 
@@ -638,6 +649,7 @@ def build_resource_summary(resource_name: str, points: list, rates: dict) -> dic
     deployments = []
     resource_cost = 0.0
     total_tokens = 0
+    total_cached = 0
     total_calls = 0
 
     for dep, m in sorted(breakdown.items()):
@@ -650,17 +662,22 @@ def build_resource_summary(resource_name: str, points: list, rates: dict) -> dic
             "prompt_tokens": prompt,
             "completion_tokens": comp,
             "total_tokens": int(m.get("total_tokens", 0)),
+            "cached_tokens": int(m.get("cached_tokens", 0)),
+            "cache_write_tokens": int(m.get("cache_write_5m", 0))
+            + int(m.get("cache_write_1h", 0)),
             "calls": int(m.get("calls", 0)),
             "estimated_cost_usd": round(cost, 2),
         })
         resource_cost += cost
         total_tokens += int(m.get("total_tokens", 0))
+        total_cached += int(m.get("cached_tokens", 0))
         total_calls += int(m.get("calls", 0))
 
     return {
         "resource": resource_name,
         "estimated_cost_usd": round(resource_cost, 2),
         "total_tokens": total_tokens,
+        "cached_tokens": total_cached,
         "calls": total_calls,
         "by_deployment": deployments,
     }
