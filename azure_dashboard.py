@@ -602,11 +602,10 @@ def _model_rows(entry):
         if name == "(all)" or not name:
             continue
         tokens, calls = d.get("total_tokens") or 0, d.get("calls") or 0
-        est = d.get("estimated_cost_usd") or 0
-        if not (tokens or calls or est):
+        if not (tokens or calls):
             continue
-        out.append({"name": name, "tokens": tokens, "calls": calls, "est": est})
-    out.sort(key=lambda m: (m["est"], m["tokens"]), reverse=True)
+        out.append({"name": name, "tokens": tokens, "calls": calls})
+    out.sort(key=lambda m: (m["tokens"], m["calls"]), reverse=True)
     return out
 
 
@@ -635,7 +634,6 @@ def build_roster(snapshot):
         if row is None:
             row = {
                 "name": name,
-                "est": r.get("estimated_cost_usd"),
                 "tokens": r.get("total_tokens"),
                 "calls": r.get("calls"),
                 "status": r.get("status"),  # "removed" for resources no longer in RG
@@ -645,17 +643,14 @@ def build_roster(snapshot):
             roster.append(row)
             continue
         # Folding collapsed two entries onto one account: merge their totals.
-        for k in ("est", "tokens", "calls"):
-            if r.get({"est": "estimated_cost_usd", "tokens": "total_tokens",
-                      "calls": "calls"}[k]) is not None:
-                row[k] = (row.get(k) or 0) + (r.get(
-                    {"est": "estimated_cost_usd", "tokens": "total_tokens",
-                     "calls": "calls"}[k]) or 0)
+        for k, src_key in (("tokens", "total_tokens"), ("calls", "calls")):
+            if r.get(src_key) is not None:
+                row[k] = (row.get(k) or 0) + (r.get(src_key) or 0)
         row["models"] = sorted(row.get("models", []) + _model_rows(r),
-                               key=lambda m: (m["est"], m["tokens"]), reverse=True)
+                               key=lambda m: (m["tokens"], m["calls"]), reverse=True)
         if not r.get("status"):
             row["status"] = None  # a live entry outranks a "removed" one
-    return roster, mtd.get("estimated_cost_usd")
+    return roster
 
 
 def _json_for_script(obj):
@@ -715,7 +710,7 @@ def build_context(db_path=None):
                    for (d, rn, m, c, rid) in billed_rows]
     months = group_by_month(billed_rows)
     month_keys = sorted(months.keys())
-    roster, snap_estimated = build_roster(snapshot)
+    roster = build_roster(snapshot)
     canonical = {r["name"].lower(): r["name"] for r in roster}
     # Resolve each Foundry SaaS resource's clipped model token against the
     # account's real deployment roster, so segments name the actual model.
@@ -736,6 +731,5 @@ def build_context(db_path=None):
         "months_json": _json_for_script(payloads),
         "month_keys_json": _json_for_script(month_keys),
         "roster_json": _json_for_script(roster),
-        "snap_estimated_json": _json_for_script(snap_estimated),
         "budget_json": json.dumps(budget),
     }

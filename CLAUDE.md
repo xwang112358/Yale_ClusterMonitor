@@ -10,14 +10,16 @@ Two things ship from this repo:
    `deploy/monitor-receive.sh`).
 2. **Azure Usage dashboard** — `/azure` (login-required). Azure OpenAI / Cognitive Services
    spend for the `image-text-medical` resource group: Year/Month navigation, per-resource
-   billing, a token-based estimate, and a "Tracked resources" roster including idle/brand-new
+   billing, per-model token/call usage, and a "Tracked resources" roster including idle/brand-new
    resources. Code: `azure_dashboard.py` + `templates/azure.html`.
 
 **Data pipeline** that feeds `/azure` (version-controlled here, but on the droplet it RUNS
 from a separate dir so the Azure secret stays out of the web app):
 - `usage_monitor.py` — polls Azure Monitor metrics + Cost Management, writes `usage.db` (SQLite).
 - `dashboard.py` — standalone offline HTML generator (same design as `/azure`) → `dashboard.html`.
-- `rates.json` — USD-per-1M-token price table for the estimate.
+- `rates.json` — USD-per-1M-token price table. **Retired from the UI** (2026-09): the
+  dashboard no longer shows any dollar estimate. Still read by the pipeline, which keeps
+  writing `estimated_cost_usd` into the snapshot; nothing renders it.
 
 ## Repo layout
 - `app.py` — routes `/`, `/login`, `/logout`, `/azure`, `/healthz`. `/azure` lazy-imports `azure_dashboard`.
@@ -51,7 +53,7 @@ Host `cluster-monitor` = `root@159.223.173.141`, served at `https://mishamonitor
   - `azure-usage-monitor.timer` (**4h**) → full run (metrics + Cost Management). The ONLY thing that
     calls Cost Management.
   - `azure-usage-metrics.timer` (**30 min**) → `usage_monitor.py --metrics-only`: refreshes token
-    metrics / the estimate, skips Cost Management (replays cached `billed_costs` so Billed never drops).
+    per-model token/call metrics, skips Cost Management (replays cached `billed_costs` so Billed never drops).
 - Shared venv: `/home/monitor/ClusterMonitor/.venv` (used by both the app and the pipeline).
 
 ### Deploy (push → pull; full version in DEPLOY_AZURE.md)
@@ -79,8 +81,8 @@ Non-interactive ssh: `ssh -o BatchMode=yes -o ConnectTimeout=12 root@159.223.173
   it (1 call/run). DON'T run repeated `usage_monitor.py --backfill`. If a backfill 429s, load history
   a different way: build a portable SQLite of `billed_costs` rows on a machine that already has them,
   scp it, and merge — `ATTACH '/tmp/hist.db' AS h; INSERT OR REPLACE INTO billed_costs SELECT * FROM h.billed_costs;`
-- **8–24h billing lag.** The current month reads ~$0 for the first day(s); the token estimate (from
-  metrics) updates immediately while billed `$` (from Cost Management) trails. Not a bug.
+- **8–24h billing lag.** The current month reads ~$0 for the first day(s); token/call counts (from
+  metrics) update immediately while billed `$` (from Cost Management) trails. Not a bug.
 - **Custom timeframe capped at 1 year** by Azure → `query_cost_management` clamps the span to <365 days.
   Routine runs use a 2-month rolling window (`BILLING_LOOKBACK_MONTHS`); `--backfill [N]` for a deep fill.
 - **Two metric vocabularies.** Legacy OpenAI accounts: `ProcessedPromptTokens`/`GeneratedTokens`/`TotalCalls`.
@@ -141,11 +143,15 @@ Non-interactive ssh: `ssh -o BatchMode=yes -o ConnectTimeout=12 root@159.223.173
   An `accounts/projects` child with no activity is dropped — its traffic is already on
   the parent account, so it was a duplicate row (volmo-jaxon vs volmo-jaxon-resource).
   An ACTIVE project is still shown, which is why discovery keeps them.
-- **The token estimate under-reads Claude.** With rates and metrics correct,
-  claude-sonnet-4-5 estimates to the cent ($3.74 = $3.74) but claude-sonnet-4-6 came in at
-  $41.56 against $77.02 billed (~1.85x). Most likely adaptive-thinking tokens are billed as
-  output but absent from Azure's `OutputTokens` metric. The estimate is a DIAGNOSTIC —
-  billed $ from Cost Management is authoritative. Don't paper over it with a fudge factor.
+- **The dollar estimate is RETIRED from the UI (2026-09) — don't add it back.** It was
+  removed because it diverged too far from billed cost to be trusted: with rates and metrics
+  both correct, claude-sonnet-4-5 estimated to the cent ($3.74 = $3.74) but claude-sonnet-4-6
+  came in at $41.56 against $77.02 billed (~1.85x), most likely because adaptive-thinking
+  tokens are billed as output but absent from Azure's `OutputTokens` metric. A per-model
+  dollar figure that can be ~2x wrong is worse than none next to an authoritative billed
+  number. What the dashboard shows now: **billed $** (Cost Management, authoritative) and
+  **per-model tokens/calls** (Azure Monitor, near-live) — usage, not inferred money.
+  The pipeline still computes `estimated_cost_usd` into the snapshot; nothing renders it.
 - **Claude rates are Anthropic list rates.** Foundry bills in Claude Consumption Units
   ($0.01/CCU) but rates tokens at standard per-model rates, so `rates.json` uses the
   published $/MTok unchanged (platform.claude.com/docs/en/about-claude/pricing).

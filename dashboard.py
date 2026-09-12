@@ -638,11 +638,10 @@ def _model_rows(entry):
         if name == "(all)" or not name:
             continue
         tokens, calls = d.get("total_tokens") or 0, d.get("calls") or 0
-        est = d.get("estimated_cost_usd") or 0
-        if not (tokens or calls or est):
+        if not (tokens or calls):
             continue
-        out.append({"name": name, "tokens": tokens, "calls": calls, "est": est})
-    out.sort(key=lambda m: (m["est"], m["tokens"]), reverse=True)
+        out.append({"name": name, "tokens": tokens, "calls": calls})
+    out.sort(key=lambda m: (m["tokens"], m["calls"]), reverse=True)
     return out
 
 
@@ -667,19 +666,17 @@ def build_roster(snapshot):
         name = fold_marketplace_name(r["resource"], saas_parents)
         row = seen.get(name)
         if row is None:
-            row = {"name": name, "est": r.get("estimated_cost_usd"),
-                   "tokens": r.get("total_tokens"), "calls": r.get("calls"),
-                   "models": _model_rows(r)}
+            row = {"name": name, "tokens": r.get("total_tokens"),
+                   "calls": r.get("calls"), "models": _model_rows(r)}
             seen[name] = row
             roster.append(row)
             continue
-        for k, src_key in (("est", "estimated_cost_usd"), ("tokens", "total_tokens"),
-                           ("calls", "calls")):
+        for k, src_key in (("tokens", "total_tokens"), ("calls", "calls")):
             if r.get(src_key) is not None:
                 row[k] = (row.get(k) or 0) + (r.get(src_key) or 0)
         row["models"] = sorted(row.get("models", []) + _model_rows(r),
-                               key=lambda m: (m["est"], m["tokens"]), reverse=True)
-    return roster, mtd.get("estimated_cost_usd")
+                               key=lambda m: (m["tokens"], m["calls"]), reverse=True)
+    return roster
 
 
 # ---------------------------------------------------------------------------
@@ -807,12 +804,12 @@ PAGE = r"""<!DOCTYPE html>
     <li><b>Who to contact:</b> ping <a href="mailto:allen.wang.xw532@yale.edu">Allen Wang</a> or
         <a href="mailto:hyunjae.kim@yale.edu">Hyunjae Kim</a> about unexpected spend, a new deployment/key,
         a budget bump, or a 429/quota error.</li>
-    <li><b>Billed vs estimated:</b> "Billed" is the authoritative invoiced figure from Cost
+    <li><b>Billed vs usage:</b> "Billed" is the authoritative invoiced figure from Cost
         Management, but it <b>lags actual token usage by ~8&ndash;24h</b> &mdash; so early in the
-        month, or right after heavy use, it under-reports. The <b>token-based estimate</b> refreshes
-        every <b style="color:var(--red)">~30&nbsp;min</b> from Azure Monitor metrics (current month
-        only), while <b>billed</b> updates every <b style="color:var(--red)">4h</b> &mdash; so
-        <b>check the estimate first</b> for a live read on spend, and treat billed as the final word
+        month, or right after heavy use, it under-reports. <b>Tokens</b> and <b>calls</b> (per
+        model, current month) refresh every <b style="color:var(--red)">~30&nbsp;min</b> from Azure
+        Monitor metrics, while <b>billed</b> updates every <b style="color:var(--red)">4h</b>
+        &mdash; so read tokens/calls for live activity, and treat billed as the final word on cost
         once it catches up.</li>
   </ul>
 </div>
@@ -822,8 +819,6 @@ PAGE = r"""<!DOCTYPE html>
     <div id="kpi-billed" class="value">—</div><div class="sub">real invoiced (Cost Management)</div></div>
   <div class="kpi"><div class="label">Monthly budget</div>
     <div class="value">$__BUDGET__</div><div id="kpi-pct" class="sub">—</div></div>
-  <div class="kpi"><div class="label">Token-based estimate</div>
-    <div id="kpi-est" class="value">—</div><div id="kpi-est-sub" class="sub">current month only</div></div>
   <div class="kpi"><div class="label">Tracked resources</div>
     <div id="kpi-res" class="value">—</div><div id="kpi-res-sub" class="sub">—</div></div>
 </div>
@@ -843,7 +838,7 @@ PAGE = r"""<!DOCTYPE html>
 <div class="section-title">Tracked resources
   <span class="hint" id="res-table-hint">every resource discovered in the group</span></div>
 <div class="panel"><table class="res"><thead><tr>
-  <th>Resource</th><th>Billed $</th><th>Est $</th><th>Tokens</th><th>Calls</th>
+  <th>Resource</th><th>Billed $</th><th>Tokens</th><th>Calls</th>
 </tr></thead><tbody id="res-tbody"></tbody></table></div>
 
 <div class="footer">
@@ -856,7 +851,6 @@ const MONTHS = __MONTHS_JSON__;
 const MONTH_KEYS = __MONTH_KEYS__;     // sorted ascending, e.g. ["2026-04","2026-05"]
 const BUDGET = __BUDGET_NUM__;
 const ROSTER = __ROSTER_JSON__;        // all currently discovered resources (live)
-const SNAP_ESTIMATED = __SNAP_ESTIMATED__;  // token-based estimate, current MTD
 const MLAB = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const PLOT_CFG = {displaylogo:false, responsive:true, modeBarButtonsToRemove:["lasso2d","select2d"]};
 const FIGS = ["stacked","daily_cumulative","per_resource"];
@@ -963,7 +957,7 @@ function buildResourceRows(key, data) {
   const isLive = (key === etMonth());
   const rows = {};   // keyed by lower-cased name so casing variants collapse to one row
   (data ? data.resources : []).forEach(r => {
-    rows[r.name.toLowerCase()] = {name: r.name, billed: r.billed, est: null,
+    rows[r.name.toLowerCase()] = {name: r.name, billed: r.billed,
                                   tokens: null, calls: null, idle: r.idle};
   });
   if (isLive) {
@@ -971,7 +965,7 @@ function buildResourceRows(key, data) {
       const k = r.name.toLowerCase();
       const ex = rows[k] || {name: r.name, billed: 0, idle: true};
       ex.name = r.name;            // prefer the created casing from discovery
-      ex.est = r.est; ex.tokens = r.tokens; ex.calls = r.calls;
+      ex.tokens = r.tokens; ex.calls = r.calls;
       ex.idle = (ex.billed === 0);
       rows[k] = ex;
     });
@@ -995,11 +989,6 @@ function renderMonth(key) {
   const pctEl = document.getElementById('kpi-pct');
   pctEl.textContent = pct.toFixed(1) + "% used";
   pctEl.style.color = over ? "var(--red)" : "var(--green)";
-
-  const est = isLive ? SNAP_ESTIMATED : null;
-  document.getElementById('kpi-est').textContent = (est == null) ? "—" : fmtMoney(est);
-  document.getElementById('kpi-est-sub').textContent = (est == null)
-      ? "current month only" : "gap vs billed: " + fmtMoney(billed - est);
 
   // figures
   FIGS.forEach(f => {
@@ -1025,7 +1014,7 @@ function renderMonth(key) {
   const tb = document.getElementById('res-tbody');
   tb.innerHTML = "";
   if (!rows.length) {
-    tb.innerHTML = '<tr><td colspan="5" class="dim" style="text-align:center;padding:18px;">No data for this month.</td></tr>';
+    tb.innerHTML = '<tr><td colspan="4" class="dim" style="text-align:center;padding:18px;">No data for this month.</td></tr>';
     return;
   }
   rows.forEach(r => {
@@ -1044,7 +1033,6 @@ function renderMonth(key) {
     tr.innerHTML =
       '<td>' + r.name + badge + toggle + '</td>' +
       '<td>' + (r.billed ? fmtMoney(r.billed) : '<span class="dim">$0.00</span>') + '</td>' +
-      '<td>' + (r.est == null ? '<span class="dim">—</span>' : fmtMoney(r.est)) + '</td>' +
       '<td class="dim">—</td>' +
       '<td class="dim">—</td>';
     tb.appendChild(tr);
@@ -1056,7 +1044,6 @@ function renderMonth(key) {
       mtr.innerHTML =
         '<td class="model-name">' + m.name + '</td>' +
         '<td class="dim">—</td>' +
-        '<td>' + (m.est ? fmtMoney(m.est) : '<span class="dim">$0.00</span>') + '</td>' +
         '<td>' + fmtInt(m.tokens) + '</td>' +
         '<td>' + fmtInt(m.calls) + '</td>';
       tb.appendChild(mtr); kids.push(mtr);
@@ -1113,7 +1100,7 @@ def render(snapshot, billed_rows):
     months = group_by_month(billed_rows)
     month_keys = sorted(months.keys())
 
-    roster, snap_estimated = build_roster(snapshot)
+    roster = build_roster(snapshot)
     canonical = {r["name"].lower(): r["name"] for r in roster}
     saas_parents = snapshot.get("saas_parents", {})
     billed_rows = [(d, fold_marketplace_name(rn, saas_parents), m, c, rid)
@@ -1140,7 +1127,6 @@ def render(snapshot, billed_rows):
         "__MONTHS_JSON__": json.dumps(payloads),
         "__MONTH_KEYS__": json.dumps(month_keys),
         "__ROSTER_JSON__": json.dumps(roster),
-        "__SNAP_ESTIMATED__": json.dumps(snap_estimated),
     }
     for k, v in repl.items():
         html = html.replace(k, v)

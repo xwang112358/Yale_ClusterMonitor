@@ -69,7 +69,7 @@ should show every month with data, defaulting to the current month.
 
 ### Frequent token-metrics timer (added 2026-06-03)
 
-Token metrics (Azure Monitor) aren't rate-limited like Cost Management, so the estimate is
+Token metrics (Azure Monitor) aren't rate-limited like Cost Management, so per-model usage is
 refreshed every **30 min** by a second timer, while Cost Management stays on the **4h** full run.
 `usage_monitor.py --metrics-only` does a metrics-only pass (skips Cost Management; replays cached
 `billed_costs`). One-time install on the droplet (units are version-controlled in `deploy/`):

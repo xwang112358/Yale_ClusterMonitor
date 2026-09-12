@@ -1,7 +1,7 @@
 # /etc/systemd/system/azure-usage-metrics.service
 #
 # Frequent (30-min) refresh of Azure token METRICS only — recomputes the
-# token-based estimate without calling the rate-limited Cost Management API.
+# per-model token/call counts without calling the rate-limited Cost Management API.
 # Billed $ is left to the 4h full run (azure-usage-monitor.service); a
 # metrics-only run replays cached billed_costs so the Billed KPI never drops.
 #
@@ -11,7 +11,7 @@
 #   sudo systemctl enable --now azure-usage-metrics.timer
 
 [Unit]
-Description=Refresh Azure usage token metrics (estimate only; no Cost Management)
+Description=Refresh Azure usage token/call metrics (no Cost Management)
 After=network-online.target
 Wants=network-online.target
 
