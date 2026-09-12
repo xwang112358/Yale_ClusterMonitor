@@ -124,6 +124,23 @@ Non-interactive ssh: `ssh -o BatchMode=yes -o ConnectTimeout=12 root@159.223.173
   silently dropped and the estimate read $9 against $86 billed. Deployments are claimed by
   the first vocabulary that reports them (gpt-4o reports identical values under both, so it
   is never double-counted). Do not "optimise" this back into a per-account choice.
+- **Never sum an undifferentiated metric with a per-deployment one.** `TotalCalls`
+  reports a single `(all)` bucket (no deployment dimension, 4,057); `ModelRequests`
+  splits per deployment (2,277). They count overlapping traffic, so merging them
+  double-counted calls. `query_resource_metrics()` keeps an `(all)` aggregate only when
+  NOTHING splits that bucket by deployment. The per-deployment merge is still right for
+  tokens, where both vocabularies split and cover disjoint deployments.
+- **Tracked resources shows tokens/calls per MODEL, never per resource** — a resource
+  total sums models priced differently, so it means nothing. Models hang off each row as
+  a collapsible list (`_model_rows()`), `(all)` and zero-activity models excluded. The
+  resource-level count is still computed: it drives the IDLE/NEW badge.
+- **The roster must never show a marketplace id or an idle project.** `build_roster()`
+  folds marketplace ids onto their account via the snapshot's `saas_parents` (so the
+  display is correct even if `billed_costs` was never repaired) and buckets an
+  unresolvable one under "marketplace (unattributed)" rather than printing a 64-char id.
+  An `accounts/projects` child with no activity is dropped — its traffic is already on
+  the parent account, so it was a duplicate row (volmo-jaxon vs volmo-jaxon-resource).
+  An ACTIVE project is still shown, which is why discovery keeps them.
 - **The token estimate under-reads Claude.** With rates and metrics correct,
   claude-sonnet-4-5 estimates to the cent ($3.74 = $3.74) but claude-sonnet-4-6 came in at
   $41.56 against $77.02 billed (~1.85x). Most likely adaptive-thinking tokens are billed as

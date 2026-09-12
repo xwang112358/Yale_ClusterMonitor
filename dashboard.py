@@ -53,7 +53,7 @@ RED = "#f44336"
 # Page and chart text scale. The HTML sets the same multiplier on the root
 # font-size (all CSS sizes are rem), so this keeps Plotly's px fonts in step;
 # change both together or the charts drift out of proportion with the page.
-FONT_SCALE = 2.0
+FONT_SCALE = 1.25
 
 
 def fs(px):
@@ -135,6 +135,27 @@ def _pretty_model(name):
     if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
         return parts[0] + "-" + parts[1] + "." + parts[2]
     return name.lower().rstrip("-")
+
+
+# A marketplace SaaS entity is a billing artefact, not a resource anyone manages:
+# its spend belongs to the Foundry / Azure OpenAI account hosting the deployment.
+# The pipeline already folds these at ingestion, but the roster must not be able to
+# show one even if that has not run yet (a brand-new deployment, an un-repaired DB),
+# so fold again here from the prefix map the snapshot carries.
+MARKETPLACE_RE = re.compile(r"^.+-(?P<parent>[0-9a-f]{15})-[0-9a-f]{32}$", re.I)
+UNATTRIBUTED = "marketplace (unattributed)"
+
+
+def fold_marketplace_name(name, saas_parents):
+    """Account name for a marketplace billing id, else a single labelled bucket.
+
+    Never returns the raw id: a 64-char marketplace name in a roster of Foundry
+    resources is noise, and bucketing keeps the money visible instead of hiding it.
+    """
+    m = MARKETPLACE_RE.match(name or "")
+    if not m:
+        return name
+    return (saas_parents or {}).get(m.group("parent").lower()) or UNATTRIBUTED
 
 
 def _deployment_records(entry):
@@ -605,18 +626,59 @@ def build_month_payload(ym, rows, budget, canonical=None, saas_labels=None):
     }
 
 
+def _model_rows(entry):
+    """Per-model activity for a resource, biggest first.
+
+    Drops the "(all)" pseudo-deployment (an account total, not a model) and
+    anything with no activity, so the table lists models that actually ran.
+    """
+    out = []
+    for d in entry.get("by_deployment", []) or []:
+        name = d.get("deployment") or ""
+        if name == "(all)" or not name:
+            continue
+        tokens, calls = d.get("total_tokens") or 0, d.get("calls") or 0
+        est = d.get("estimated_cost_usd") or 0
+        if not (tokens or calls or est):
+            continue
+        out.append({"name": name, "tokens": tokens, "calls": calls, "est": est})
+    out.sort(key=lambda m: (m["est"], m["tokens"]), reverse=True)
+    return out
+
+
+def _is_inactive_project(entry):
+    """True for an accounts/projects child with nothing to report."""
+    if not str(entry.get("resource", "")).endswith(" (project)"):
+        return False
+    return not any((entry.get("total_tokens") or 0,
+                    entry.get("calls") or 0,
+                    entry.get("estimated_cost_usd") or 0))
+
+
 def build_roster(snapshot):
     """Current full resource roster from the latest snapshot — every discovered
     resource with its MTD token/call activity. Merged onto the live month."""
     mtd = snapshot.get("month_to_date", {})
-    roster = []
+    saas_parents = snapshot.get("saas_parents", {})
+    roster, seen = [], {}
     for r in mtd.get("by_resource", []):
-        roster.append({
-            "name": r["resource"],
-            "est": r.get("estimated_cost_usd"),
-            "tokens": r.get("total_tokens"),
-            "calls": r.get("calls"),
-        })
+        if _is_inactive_project(r):
+            continue
+        name = fold_marketplace_name(r["resource"], saas_parents)
+        row = seen.get(name)
+        if row is None:
+            row = {"name": name, "est": r.get("estimated_cost_usd"),
+                   "tokens": r.get("total_tokens"), "calls": r.get("calls"),
+                   "models": _model_rows(r)}
+            seen[name] = row
+            roster.append(row)
+            continue
+        for k, src_key in (("est", "estimated_cost_usd"), ("tokens", "total_tokens"),
+                           ("calls", "calls")):
+            if r.get(src_key) is not None:
+                row[k] = (row.get(k) or 0) + (r.get(src_key) or 0)
+        row["models"] = sorted(row.get("models", []) + _model_rows(r),
+                               key=lambda m: (m["est"], m["tokens"]), reverse=True)
     return roster, mtd.get("estimated_cost_usd")
 
 
@@ -639,7 +701,7 @@ PAGE = r"""<!DOCTYPE html>
   /* Page text scale. Every size below is in rem, so this one knob scales all of
      them. Keep it in step with FONT_SCALE in azure_dashboard.py / dashboard.py,
      which applies the same multiplier to Plotly's px font sizes. */
-  html { font-size: 200%; }
+  html { font-size: 125%; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: 'SF Mono','Cascadia Code','Consolas',monospace;
          background: var(--bg); color: var(--text); padding: 20px; min-height: 100vh; }
@@ -690,6 +752,14 @@ PAGE = r"""<!DOCTYPE html>
   table.res th { color: var(--text-dim); font-weight: 500; text-transform: uppercase;
                  font-size: 0.62rem; letter-spacing: 1px; }
   table.res tr:hover td { background: var(--card-soft); }
+  tr.res-row.has-models { cursor: pointer; }
+  tr.res-row.has-models:hover td { background: var(--card-soft); }
+  .caret { display: inline-block; margin-left: 10px; color: var(--text-dim);
+           transition: transform 0.12s ease; }
+  tr.res-row.open .caret { transform: rotate(90deg); }
+  .mcount { color: var(--text-dim); font-size: 0.62rem; margin-left: 6px; }
+  tr.model-row td { color: var(--text-dim); font-size: 0.7rem; border-top: none; }
+  tr.model-row .model-name { padding-left: 26px; }
   .badge { font-size: 0.58rem; padding: 1px 6px; border-radius: 8px; letter-spacing: 0.6px; margin-left: 8px; }
   .badge.new { color: var(--yellow); border: 1px solid var(--yellow); }
   .badge.idle { color: var(--text-dim); border: 1px solid var(--card-border); }
@@ -963,13 +1033,40 @@ function renderMonth(key) {
     if (r.idle) badge = (r.calls ? '<span class="badge idle">IDLE</span>'
                                  : '<span class="badge new">NEW</span>');
     const tr = document.createElement('tr');
+    const models = r.models || [];
+    // Tokens and calls are per MODEL: a resource-level total sums unrelated
+    // models priced differently. Models hang off the row as a collapsible list.
+    const toggle = models.length
+      ? '<span class="caret">▸</span><span class="mcount">' + models.length
+        + (models.length === 1 ? ' model' : ' models') + '</span>'
+      : '';
+    tr.className = models.length ? 'res-row has-models' : 'res-row';
     tr.innerHTML =
-      '<td>' + r.name + badge + '</td>' +
+      '<td>' + r.name + badge + toggle + '</td>' +
       '<td>' + (r.billed ? fmtMoney(r.billed) : '<span class="dim">$0.00</span>') + '</td>' +
       '<td>' + (r.est == null ? '<span class="dim">—</span>' : fmtMoney(r.est)) + '</td>' +
-      '<td>' + (r.tokens == null ? '<span class="dim">—</span>' : fmtInt(r.tokens)) + '</td>' +
-      '<td>' + (r.calls == null ? '<span class="dim">—</span>' : fmtInt(r.calls)) + '</td>';
+      '<td class="dim">—</td>' +
+      '<td class="dim">—</td>';
     tb.appendChild(tr);
+    const kids = [];
+    models.forEach(m => {
+      const mtr = document.createElement('tr');
+      mtr.className = 'model-row';
+      mtr.hidden = true;
+      mtr.innerHTML =
+        '<td class="model-name">' + m.name + '</td>' +
+        '<td class="dim">—</td>' +
+        '<td>' + (m.est ? fmtMoney(m.est) : '<span class="dim">$0.00</span>') + '</td>' +
+        '<td>' + fmtInt(m.tokens) + '</td>' +
+        '<td>' + fmtInt(m.calls) + '</td>';
+      tb.appendChild(mtr); kids.push(mtr);
+    });
+    if (kids.length) {
+      tr.addEventListener('click', () => {
+        const open = tr.classList.toggle('open');
+        kids.forEach(k => { k.hidden = !open; });
+      });
+    }
   });
 }
 
@@ -1018,6 +1115,11 @@ def render(snapshot, billed_rows):
 
     roster, snap_estimated = build_roster(snapshot)
     canonical = {r["name"].lower(): r["name"] for r in roster}
+    saas_parents = snapshot.get("saas_parents", {})
+    billed_rows = [(d, fold_marketplace_name(rn, saas_parents), m, c, rid)
+                   for (d, rn, m, c, rid) in billed_rows]
+    months = group_by_month(billed_rows)
+    month_keys = sorted(months.keys())
     folded = [(d, canonical.get(rn.lower(), rn), m, c, rid)
               for (d, rn, m, c, rid) in billed_rows]
     saas_labels, _inferred = resolve_saas_labels(

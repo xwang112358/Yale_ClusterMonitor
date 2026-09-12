@@ -21,7 +21,7 @@
   /* Page text scale. Every size below is in rem, so this one knob scales all of
      them. Keep it in step with FONT_SCALE in azure_dashboard.py / dashboard.py,
      which applies the same multiplier to Plotly's px font sizes. */
-  html { font-size: 200%; }
+  html { font-size: 125%; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
@@ -174,6 +174,16 @@
   table.res th { color: var(--text-dim); font-weight: 500; text-transform: uppercase;
                  font-size: 0.62rem; letter-spacing: 1px; }
   table.res tr:hover td { background: var(--card-soft); }
+  tr.res-row.has-models { cursor: pointer; }
+  tr.res-row.has-models:hover td { background: var(--card-soft); }
+  .caret { display: inline-block; margin-left: 10px; color: var(--text-dim);
+           transition: transform 0.12s ease; }
+  tr.res-row.open .caret { transform: rotate(90deg); }
+  .mcount { color: var(--text-dim); font-size: 0.62rem; margin-left: 6px; }
+  tr.model-row td { color: var(--text-dim); font-size: 0.7rem; border-top: none; }
+  /* Indentation alone marks the nesting: a leading glyph renders as tofu in the
+     monospace stack and collides with the model name. */
+  tr.model-row .model-name { padding-left: 26px; }
   .badge { font-size: 0.58rem; padding: 1px 6px; border-radius: 8px; letter-spacing: 0.6px; margin-left: 8px; }
   .badge.new { color: var(--yellow); border: 1px solid var(--yellow); }
   .badge.idle { color: var(--text-dim); border: 1px solid var(--card-border); }
@@ -276,7 +286,7 @@
 <div class="panel"><div id="fig-per-resource" class="plotly-host"></div></div>
 
 <div class="section-title">Tracked resources
-  <span class="hint" id="res-table-hint">every resource discovered in the group</span></div>
+  <span class="hint" id="res-table-hint">every resource discovered in the group &middot; click a resource for its models</span></div>
 <div class="panel"><table class="res"><thead><tr>
   <th>Resource</th><th>Billed $</th><th>Est $</th><th>Tokens</th><th>Calls</th>
 </tr></thead><tbody id="res-tbody"></tbody></table></div>
@@ -412,6 +422,7 @@ function buildResourceRows(key, data) {
       const ex = rows[k] || {name: r.name, billed: 0, idle: true};
       ex.name = r.name;            // prefer the created casing from discovery
       ex.est = r.est; ex.tokens = r.tokens; ex.calls = r.calls;
+      ex.models = r.models || [];
       ex.status = r.status;        // "removed" = billed in this month but no longer in RG
       ex.idle = (ex.billed === 0);
       rows[k] = ex;
@@ -465,7 +476,7 @@ function renderMonth(key) {
   document.getElementById('kpi-res-sub').textContent =
       rows.length ? (nBilling + " billing · " + nIdle + " idle/new") : "no resources";
   document.getElementById('res-table-hint').textContent = isLive
-      ? "every resource discovered in the group · NEW = no spend yet · IDLE = has calls, no bill · REMOVED = billed this month but no longer in RG"
+      ? "tokens · calls shown per model · NEW = no spend yet · IDLE = has calls, no bill · REMOVED = billed this month but no longer in RG"
       : "resources billed in " + monthName(key);
 
   const tb = document.getElementById('res-tbody');
@@ -483,13 +494,44 @@ function renderMonth(key) {
                       : '<span class="badge new">NEW</span>';
     }
     const tr = document.createElement('tr');
+    const models = r.models || [];
+    // Tokens and calls are reported per MODEL only: a resource-level total sums
+    // unrelated models priced differently, so it says nothing useful. The count
+    // still drives the IDLE/NEW badge above, it is just not displayed.
+    // Models hang off the resource as a collapsible list, closed by default so a
+    // roster of ~16 resources stays scannable.
+    const toggle = models.length
+      ? '<span class="caret">▸</span><span class="mcount">' + models.length
+        + (models.length === 1 ? ' model' : ' models') + '</span>'
+      : '';
+    tr.className = models.length ? 'res-row has-models' : 'res-row';
     tr.innerHTML =
-      '<td>' + r.name + badge + '</td>' +
+      '<td>' + r.name + badge + toggle + '</td>' +
       '<td>' + (r.billed ? fmtMoney(r.billed) : '<span class="dim">$0.00</span>') + '</td>' +
       '<td>' + (r.est == null ? '<span class="dim">—</span>' : fmtMoney(r.est)) + '</td>' +
-      '<td>' + (r.tokens == null ? '<span class="dim">—</span>' : fmtInt(r.tokens)) + '</td>' +
-      '<td>' + (r.calls == null ? '<span class="dim">—</span>' : fmtInt(r.calls)) + '</td>';
+      '<td class="dim">—</td>' +
+      '<td class="dim">—</td>';
     tb.appendChild(tr);
+    const kids = [];
+    models.forEach(m => {
+      const mtr = document.createElement('tr');
+      mtr.className = 'model-row';
+      mtr.hidden = true;
+      mtr.innerHTML =
+        '<td class="model-name">' + m.name + '</td>' +
+        '<td class="dim">—</td>' +
+        '<td>' + (m.est ? fmtMoney(m.est) : '<span class="dim">$0.00</span>') + '</td>' +
+        '<td>' + fmtInt(m.tokens) + '</td>' +
+        '<td>' + fmtInt(m.calls) + '</td>';
+      tb.appendChild(mtr);
+      kids.push(mtr);
+    });
+    if (kids.length) {
+      tr.addEventListener('click', () => {
+        const open = tr.classList.toggle('open');
+        kids.forEach(k => { k.hidden = !open; });
+      });
+    }
   });
 }
 

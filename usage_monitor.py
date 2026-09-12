@@ -62,6 +62,9 @@ DB_PATH = Path(os.environ.get("DB_PATH", "usage.db"))
 # For each bucket the candidates are tried in order; the first SUPPORTED candidate
 # that returns non-zero data wins (an all-zero supported metric is kept only as a
 # fallback), so a resource that exposes both vocabularies is never double-counted.
+# Label _query_one_metric uses when a metric carries no deployment dimension.
+AGGREGATE_DEPLOYMENT = "(all)"
+
 METRIC_BUCKETS = [
     ("prompt_tokens",     ["ProcessedPromptTokens", "InputTokens"]),
     ("completion_tokens", ["GeneratedTokens", "OutputTokens"]),
@@ -582,13 +585,23 @@ def query_resource_metrics(client, resource_id, start, end):
     """
     points = []
     for bucket, candidates in METRIC_BUCKETS:
-        claimed = set()      # deployments already taken by an earlier vocabulary
+        claimed = set()       # deployments already taken by an earlier vocabulary
         zero_fallback = None  # supported but all-zero, used only if nothing lands
+        aggregate = None      # a candidate with NO deployment dimension at all
         for cand in candidates:
             res = _query_one_metric(client, resource_id, cand, start, end)
             if res is None:
                 continue  # unsupported for this resource type — try next vocab
-            fresh = {dep for _ts, dep, val in res if val} - claimed
+            with_data = {dep for _ts, dep, val in res if val}
+            if with_data and with_data <= {AGGREGATE_DEPLOYMENT}:
+                # An undifferentiated account total (TotalCalls reports one "(all)"
+                # bucket; ModelRequests splits per deployment). The two count
+                # overlapping traffic, so they must never be summed -- keep this
+                # only if nothing else splits the bucket by deployment.
+                if aggregate is None:
+                    aggregate = res
+                continue
+            fresh = with_data - claimed - {AGGREGATE_DEPLOYMENT}
             if not fresh:
                 if zero_fallback is None:
                     zero_fallback = res
@@ -597,9 +610,11 @@ def query_resource_metrics(client, resource_id, start, end):
                 if dep in fresh:
                     points.append((ts, bucket, dep, val))
             claimed |= fresh
-        if not claimed and zero_fallback is not None:
-            for ts, dep, val in zero_fallback:
-                points.append((ts, bucket, dep, val))
+        if not claimed:
+            src = aggregate if aggregate is not None else zero_fallback
+            if src is not None:
+                for ts, dep, val in src:
+                    points.append((ts, bucket, dep, val))
     return points
 
 
@@ -908,6 +923,9 @@ def main(lookback_months: int = BILLING_LOOKBACK_MONTHS, query_cost: bool = True
         # account -> [deployment names]; lets the dashboard resolve the SaaS
         # resource's clipped model token to the real model.
         "deployments_by_account": deployments_by_account,
+        # <internalId prefix> -> account, so the dashboard can fold a marketplace
+        # billing id onto its account even if billed_costs has not been repaired.
+        "saas_parents": saas_parents,
         "month_to_date": {
             "billed_cost_usd": billed_total,
             "billed_source": billed_source,

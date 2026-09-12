@@ -42,7 +42,7 @@ RED = "#f44336"
 # Page and chart text scale. The HTML sets the same multiplier on the root
 # font-size (all CSS sizes are rem), so this keeps Plotly's px fonts in step;
 # change both together or the charts drift out of proportion with the page.
-FONT_SCALE = 2.0
+FONT_SCALE = 1.25
 
 
 def fs(px):
@@ -118,6 +118,27 @@ def _pretty_model(name):
     if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
         return parts[0] + "-" + parts[1] + "." + parts[2]
     return name.lower().rstrip("-")
+
+
+# A marketplace SaaS entity is a billing artefact, not a resource anyone manages:
+# its spend belongs to the Foundry / Azure OpenAI account hosting the deployment.
+# The pipeline already folds these at ingestion, but the roster must not be able to
+# show one even if that has not run yet (a brand-new deployment, an un-repaired DB),
+# so fold again here from the prefix map the snapshot carries.
+MARKETPLACE_RE = re.compile(r"^.+-(?P<parent>[0-9a-f]{15})-[0-9a-f]{32}$", re.I)
+UNATTRIBUTED = "marketplace (unattributed)"
+
+
+def fold_marketplace_name(name, saas_parents):
+    """Account name for a marketplace billing id, else a single labelled bucket.
+
+    Never returns the raw id: a 64-char marketplace name in a roster of Foundry
+    resources is noise, and bucketing keeps the money visible instead of hiding it.
+    """
+    m = MARKETPLACE_RE.match(name or "")
+    if not m:
+        return name
+    return (saas_parents or {}).get(m.group("parent").lower()) or UNATTRIBUTED
 
 
 def _deployment_records(entry):
@@ -569,17 +590,71 @@ def build_month_payload(rows, budget, canonical=None, saas_labels=None):
     }
 
 
+def _model_rows(entry):
+    """Per-model activity for a resource, biggest first.
+
+    Drops the "(all)" pseudo-deployment (an account total, not a model) and
+    anything with no activity, so the table lists models that actually ran.
+    """
+    out = []
+    for d in entry.get("by_deployment", []) or []:
+        name = d.get("deployment") or ""
+        if name == "(all)" or not name:
+            continue
+        tokens, calls = d.get("total_tokens") or 0, d.get("calls") or 0
+        est = d.get("estimated_cost_usd") or 0
+        if not (tokens or calls or est):
+            continue
+        out.append({"name": name, "tokens": tokens, "calls": calls, "est": est})
+    out.sort(key=lambda m: (m["est"], m["tokens"]), reverse=True)
+    return out
+
+
+def _is_inactive_project(entry):
+    """True for an accounts/projects child with nothing to report."""
+    if not str(entry.get("resource", "")).endswith(" (project)"):
+        return False
+    return not any((entry.get("total_tokens") or 0,
+                    entry.get("calls") or 0,
+                    entry.get("estimated_cost_usd") or 0))
+
+
 def build_roster(snapshot):
     mtd = snapshot.get("month_to_date", {})
-    roster = []
+    saas_parents = snapshot.get("saas_parents", {})
+    roster, seen = [], {}
     for r in mtd.get("by_resource", []):
-        roster.append({
-            "name": r["resource"],
-            "est": r.get("estimated_cost_usd"),
-            "tokens": r.get("total_tokens"),
-            "calls": r.get("calls"),
-            "status": r.get("status"),  # "removed" for resources no longer in RG
-        })
+        # An accounts/projects child is not a resource of its own -- its traffic
+        # shows up on the parent account's metrics. Discovery keeps them because a
+        # project CAN report separately, but one with no activity is just a
+        # duplicate row next to its parent (volmo-jaxon vs volmo-jaxon-resource).
+        if _is_inactive_project(r):
+            continue
+        name = fold_marketplace_name(r["resource"], saas_parents)
+        row = seen.get(name)
+        if row is None:
+            row = {
+                "name": name,
+                "est": r.get("estimated_cost_usd"),
+                "tokens": r.get("total_tokens"),
+                "calls": r.get("calls"),
+                "status": r.get("status"),  # "removed" for resources no longer in RG
+                "models": _model_rows(r),
+            }
+            seen[name] = row
+            roster.append(row)
+            continue
+        # Folding collapsed two entries onto one account: merge their totals.
+        for k in ("est", "tokens", "calls"):
+            if r.get({"est": "estimated_cost_usd", "tokens": "total_tokens",
+                      "calls": "calls"}[k]) is not None:
+                row[k] = (row.get(k) or 0) + (r.get(
+                    {"est": "estimated_cost_usd", "tokens": "total_tokens",
+                     "calls": "calls"}[k]) or 0)
+        row["models"] = sorted(row.get("models", []) + _model_rows(r),
+                               key=lambda m: (m["est"], m["tokens"]), reverse=True)
+        if not r.get("status"):
+            row["status"] = None  # a live entry outranks a "removed" one
     return roster, mtd.get("estimated_cost_usd")
 
 
@@ -633,6 +708,11 @@ def build_context(db_path=None):
     conn.close()
 
     budget = snapshot.get("monthly_budget_usd", 0.0)
+    # Marketplace billing ids never reach the display layer: fold them onto the
+    # account that hosts the deployment before anything is grouped or charted.
+    saas_parents = snapshot.get("saas_parents", {})
+    billed_rows = [(d, fold_marketplace_name(rn, saas_parents), m, c, rid)
+                   for (d, rn, m, c, rid) in billed_rows]
     months = group_by_month(billed_rows)
     month_keys = sorted(months.keys())
     roster, snap_estimated = build_roster(snapshot)
