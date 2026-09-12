@@ -21,6 +21,10 @@
     --red: #f44336;
     --bar-bg: #2a2d3a;
   }
+  /* Page text scale. Every font-size below is in rem, so this one knob scales all
+     of them. Matches the Azure Usage page (templates/azure.html); keep the two in
+     step so the monitor reads at one size across both pages. */
+  html { font-size: 125%; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
@@ -120,7 +124,7 @@
   /* Top GPU summary strip */
   .gpu-summary {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(11.25rem, 1fr));
     gap: 10px;
     margin-bottom: 14px;
   }
@@ -169,11 +173,15 @@
   }
   .grab-adv.show { display: flex; }
   .grab-adv label { display: flex; align-items: center; gap: 4px; }
-  .grab-adv input[type="number"] { width: 48px; }
+  .grab-adv input[type="number"] { width: 3rem; }
   .grab-cmd {
     margin-top: 6px; font-family: 'SF Mono','Cascadia Code','Consolas',monospace;
     font-size: 0.64rem; color: var(--text); background: var(--card-soft);
-    border-radius: 4px; padding: 4px 6px; overflow-x: auto; white-space: nowrap;
+    border-radius: 4px; padding: 4px 6px;
+    /* Wrap rather than clip: the card is a 1fr grid track, so it does not widen
+       with the text, and at a larger root size nowrap hid the tail of the command
+       (--mem=64G) off the edge. This is meant to be read and copied. */
+    white-space: normal; overflow-wrap: anywhere;
   }
 
   /* Bar */
@@ -192,7 +200,7 @@
   /* Node mini-cards */
   .node-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(8.125rem, 1fr));
     gap: 8px;
   }
   .node-card {
@@ -322,7 +330,7 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 280px;
+    max-width: 17.5rem;   /* scales with the root font-size */
   }
   table.jobs th {
     color: var(--text-dim);
