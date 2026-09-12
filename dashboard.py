@@ -292,7 +292,8 @@ def load(conn):
         ORDER BY usage_date
         """
     ).fetchall()
-    return snapshot, billed_rows
+    model_rows = load_model_rows(conn)
+    return snapshot, billed_rows, model_rows
 
 
 def group_by_month(billed_rows):
@@ -582,7 +583,8 @@ def fig_json(fig):
     return json.loads(fig.to_json()) if fig is not None else None
 
 
-def build_month_payload(ym, rows, budget, canonical=None, saas_labels=None):
+def build_month_payload(ym, rows, budget, canonical=None, saas_labels=None,
+                        model_rows=None):
     """Per-month billing payload: KPIs, figures, and a billed-by-resource table.
 
     The 'live roster' (all currently discovered resources, including idle/new
@@ -608,7 +610,9 @@ def build_month_payload(ym, rows, budget, canonical=None, saas_labels=None):
     billed = round(sum(c for _, c in daily), 2)
     pct = round((billed / budget) * 100, 1) if budget else 0.0
 
-    resources = [{"name": n, "billed": round(b, 2), "idle": round(b, 2) == 0.0}
+    model_rows = model_rows or {}
+    resources = [{"name": n, "billed": round(b, 2), "idle": round(b, 2) == 0.0,
+                  "models": model_rows.get((ym, n.lower()), [])}
                  for n, b in res_billed.items()]
     resources.sort(key=lambda r: r["billed"], reverse=True)
 
@@ -626,31 +630,49 @@ def build_month_payload(ym, rows, budget, canonical=None, saas_labels=None):
     }
 
 
-def _model_rows(entry):
-    """Per-model activity for a resource, biggest output first.
+def load_model_rows(conn):
+    """{(YYYY-MM, resource_lower): [ {name, input, output, cached, calls}, ... ]}
 
-    Reports input / output / cached separately rather than one total. Output is
-    the cost driver (5x input's price); cached reads are billed at 0.1x and sit
-    OUTSIDE TotalTokens, so a single total both hides them and understates real
-    traffic. Drops the "(all)" pseudo-deployment (an account total, not a model)
-    and anything with no activity, so the list is the models that actually ran.
+    Per-model activity for EVERY month, read from metric_points. This is the single
+    source for the model breakdown: verified to reproduce the live snapshot's
+    by_deployment numbers exactly, so past and current months come from one place
+    rather than the snapshot for "now" and something else for history.
+
+    Azure Monitor keeps ~93 days, and collection started 2026-04, so older months
+    simply have no rows -- they get no model list rather than a row of zeros.
     """
-    out = []
-    for d in entry.get("by_deployment", []) or []:
-        name = d.get("deployment") or ""
-        if name == "(all)" or not name:
-            continue
-        row = {
-            "name": name,
-            "input": d.get("prompt_tokens") or 0,
-            "output": d.get("completion_tokens") or 0,
-            "cached": d.get("cached_tokens") or 0,
-            "calls": d.get("calls") or 0,
-        }
-        if not any((row["input"], row["output"], row["cached"], row["calls"])):
-            continue
-        out.append(row)
-    out.sort(key=lambda m: (m["output"], m["cached"], m["input"]), reverse=True)
+    buckets = {"prompt_tokens": "input", "completion_tokens": "output",
+               "cached_tokens": "cached", "calls": "calls"}
+    acc = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
+    for ym, rname, dep, metric, total in conn.execute(
+        """
+        SELECT substr(timestamp, 1, 7), resource_name, deployment, metric_name, SUM(value)
+        FROM metric_points
+        WHERE deployment <> '(all)' AND metric_name IN
+              ('prompt_tokens', 'completion_tokens', 'cached_tokens', 'calls')
+        GROUP BY 1, 2, 3, 4
+        """
+    ):
+        acc[(ym, (rname or "").lower())][dep][buckets[metric]] += total or 0.0
+
+    out = {}
+    for key, deps in acc.items():
+        rows = []
+        for dep, vals in deps.items():
+            row = {"name": dep,
+                   "input": int(vals.get("input", 0)),
+                   "output": int(vals.get("output", 0)),
+                   "cached": int(vals.get("cached", 0)),
+                   # None, not 0, when the per-deployment calls metric never covered
+                   # this month: ModelRequests reaches back ~31 days while the token
+                   # metrics go further, so older months know the tokens but not the
+                   # call count. Rendering 0 there would assert something false.
+                   "calls": int(vals["calls"]) if "calls" in vals else None}
+            if any((row["input"], row["output"], row["cached"], row["calls"] or 0)):
+                rows.append(row)
+        if rows:
+            rows.sort(key=lambda m: (m["output"], m["cached"], m["input"]), reverse=True)
+            out[key] = rows
     return out
 
 
@@ -676,16 +698,13 @@ def build_roster(snapshot):
         row = seen.get(name)
         if row is None:
             row = {"name": name, "tokens": r.get("total_tokens"),
-                   "calls": r.get("calls"), "models": _model_rows(r)}
+                   "calls": r.get("calls")}
             seen[name] = row
             roster.append(row)
             continue
         for k, src_key in (("tokens", "total_tokens"), ("calls", "calls")):
             if r.get(src_key) is not None:
                 row[k] = (row.get(k) or 0) + (r.get(src_key) or 0)
-        row["models"] = sorted(row.get("models", []) + _model_rows(r),
-                               key=lambda m: (m["output"], m["cached"], m["input"]),
-                               reverse=True)
     return roster
 
 
@@ -968,7 +987,8 @@ function buildResourceRows(key, data) {
   const rows = {};   // keyed by lower-cased name so casing variants collapse to one row
   (data ? data.resources : []).forEach(r => {
     rows[r.name.toLowerCase()] = {name: r.name, billed: r.billed,
-                                  tokens: null, calls: null, idle: r.idle};
+                                  tokens: null, calls: null, idle: r.idle,
+                                  models: r.models || []};
   });
   if (isLive) {
     ROSTER.forEach(r => {
@@ -976,7 +996,6 @@ function buildResourceRows(key, data) {
       const ex = rows[k] || {name: r.name, billed: 0, idle: true};
       ex.name = r.name;            // prefer the created casing from discovery
       ex.tokens = r.tokens; ex.calls = r.calls;
-      ex.models = r.models || [];   // without this the model list is never rendered
       ex.idle = (ex.billed === 0);
       rows[k] = ex;
     });
@@ -1060,7 +1079,7 @@ function renderMonth(key) {
         '<td>' + fmtInt(m.input) + '</td>' +
         '<td>' + fmtInt(m.output) + '</td>' +
         '<td>' + (m.cached ? fmtInt(m.cached) : '<span class="dim">—</span>') + '</td>' +
-        '<td>' + fmtInt(m.calls) + '</td>';
+        '<td>' + (m.calls == null ? '<span class="dim">—</span>' : fmtInt(m.calls)) + '</td>';
       tb.appendChild(mtr); kids.push(mtr);
     });
     if (kids.length) {
@@ -1107,7 +1126,7 @@ watchRollover();
 """
 
 
-def render(snapshot, billed_rows):
+def render(snapshot, billed_rows, model_rows=None):
     budget = snapshot.get("monthly_budget_usd", 0.0)
     rg = snapshot.get("resource_group", "")
     generated_at = snapshot.get("generated_at", "")
@@ -1126,7 +1145,8 @@ def render(snapshot, billed_rows):
               for (d, rn, m, c, rid) in billed_rows]
     saas_labels, _inferred = resolve_saas_labels(
         folded, snapshot.get("deployments_by_account", {}))
-    payloads = {ym: build_month_payload(ym, months[ym], budget, canonical, saas_labels)
+    payloads = {ym: build_month_payload(ym, months[ym], budget, canonical, saas_labels,
+                                        model_rows or {})
                 for ym in month_keys}
 
     html = PAGE
@@ -1154,9 +1174,9 @@ def main():
     if not DB_PATH.exists():
         raise SystemExit(f"{DB_PATH} not found — run usage_monitor.py first.")
     conn = sqlite3.connect(DB_PATH)
-    snapshot, billed_rows = load(conn)
+    snapshot, billed_rows, model_rows = load(conn)
     conn.close()
-    render(snapshot, billed_rows)
+    render(snapshot, billed_rows, model_rows)
 
 
 if __name__ == "__main__":

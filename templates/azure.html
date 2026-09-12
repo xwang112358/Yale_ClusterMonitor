@@ -411,7 +411,8 @@ function buildResourceRows(key, data) {
   const rows = {};   // keyed by lower-cased name so casing variants collapse to one row
   (data ? data.resources : []).forEach(r => {
     rows[r.name.toLowerCase()] = {name: r.name, billed: r.billed,
-                                  tokens: null, calls: null, idle: r.idle};
+                                  tokens: null, calls: null, idle: r.idle,
+                                  models: r.models || []};
   });
   if (isLive) {
     ROSTER.forEach(r => {
@@ -419,7 +420,6 @@ function buildResourceRows(key, data) {
       const ex = rows[k] || {name: r.name, billed: 0, idle: true};
       ex.name = r.name;            // prefer the created casing from discovery
       ex.tokens = r.tokens; ex.calls = r.calls;
-      ex.models = r.models || [];
       ex.status = r.status;        // "removed" = billed in this month but no longer in RG
       ex.idle = (ex.billed === 0);
       rows[k] = ex;
@@ -514,7 +514,7 @@ function renderMonth(key) {
         '<td>' + fmtInt(m.input) + '</td>' +
         '<td>' + fmtInt(m.output) + '</td>' +
         '<td>' + (m.cached ? fmtInt(m.cached) : '<span class="dim">—</span>') + '</td>' +
-        '<td>' + fmtInt(m.calls) + '</td>';
+        '<td>' + (m.calls == null ? '<span class="dim">—</span>' : fmtInt(m.calls)) + '</td>';
       tb.appendChild(mtr);
       kids.push(mtr);
     });

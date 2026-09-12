@@ -132,6 +132,21 @@ Non-interactive ssh: `ssh -o BatchMode=yes -o ConnectTimeout=12 root@159.223.173
   double-counted calls. `query_resource_metrics()` keeps an `(all)` aggregate only when
   NOTHING splits that bucket by deployment. The per-deployment merge is still right for
   tokens, where both vocabularies split and cover disjoint deployments.
+- **Per-model rows come from `metric_points`, for EVERY month** (`load_model_rows()`),
+  not from the snapshot — verified to reproduce the live snapshot's by_deployment
+  numbers exactly, so there is one source rather than snapshot-for-now and
+  something-else-for-history. Azure Monitor keeps ~93 days and collection started
+  2026-04, so months before that get no model list (correct — better than zeros).
+- **`calls` is None, not 0, when unknown.** The per-deployment calls metric
+  (`ModelRequests`) reaches back ~31 days while the token metrics go further, so
+  older months know tokens but not call counts. Those render as an em dash; writing
+  0 would assert the model was never called.
+- **`--backfill-metrics [N]`** re-fetches N days (max 93) of Azure Monitor history
+  with the current collector. Azure Monitor is NOT rate-limited like Cost Management,
+  so this is cheap. It deletes a stale `(all)` aggregate row ONLY where a
+  per-deployment row covers the same resource/bucket/DAY — an earlier version deleted
+  per-bucket across the whole window and wiped July's real call counts, since
+  ModelRequests does not reach that far back.
 - **Tracked resources shows tokens/calls per MODEL, never per resource** — a resource
   total sums models priced differently, so it means nothing. Models hang off each row as
   a collapsible list (`_model_rows()`), `(all)` and zero-activity models excluded. The

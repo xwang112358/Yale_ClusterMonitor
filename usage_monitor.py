@@ -980,6 +980,74 @@ def main(lookback_months: int = BILLING_LOOKBACK_MONTHS, query_cost: bool = True
     print(json.dumps(snapshot, indent=2))
 
 
+def backfill_metrics(days: int = 90):
+    """--backfill-metrics [N]: re-fetch N days of Azure Monitor metrics.
+
+    Azure Monitor keeps ~93 days of history and is NOT rate-limited the way Cost
+    Management is, so re-querying it is cheap and safe. This exists because the
+    stored history predates two collector fixes: Claude deployments were dropped
+    from the prompt/completion buckets on mixed accounts, and cache tokens were
+    never collected at all. Re-fetching rewrites those rows correctly.
+
+    It also clears stale "(all)" aggregate rows for any bucket that now has a
+    per-deployment breakdown in the window: the old collector wrote TotalCalls as
+    one "(all)" row, and leaving those alongside the per-deployment ModelRequests
+    rows would double-count calls for anything reading the table directly.
+
+    Writes no snapshot and makes no Cost Management call.
+    """
+    days = max(1, min(days, 93))  # Azure Monitor retention
+    credential = make_credential()
+    metrics_client = MetricsQueryClient(credential)
+    conn = init_db(DB_PATH)
+    accounts = discover_accounts(credential, SUBSCRIPTION_ID, RESOURCE_GROUP)
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=days)
+    log.info("Backfilling metrics for %d day(s) across %d resource(s)", days, len(accounts))
+
+    window_start = start.date().isoformat()
+    written = 0
+    for resource_name, resource_id in accounts:
+        try:
+            points = query_resource_metrics(metrics_client, resource_id, start, end)
+        except HttpResponseError as e:
+            log.warning("Skipping %s — metrics query failed: %s", resource_name, e.message or e)
+            continue
+        for ts, metric, dep, value in points:
+            conn.execute(
+                "INSERT OR REPLACE INTO metric_points "
+                "(timestamp, resource_name, metric_name, deployment, value) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (ts.isoformat(), resource_name, metric, dep, value),
+            )
+            written += 1
+        # Drop an "(all)" row only where a per-deployment row now covers the SAME
+        # resource/bucket/day. Deleting per-bucket across the whole window would
+        # throw away real aggregate counts on days the split metric does not reach
+        # (ModelRequests does not go as far back as TotalCalls), leaving zeroes.
+        cur = conn.execute(
+            """
+            DELETE FROM metric_points
+            WHERE resource_name = ? AND deployment = ?
+              AND substr(timestamp, 1, 10) >= ?
+              AND EXISTS (
+                    SELECT 1 FROM metric_points p
+                    WHERE p.resource_name = metric_points.resource_name
+                      AND p.metric_name   = metric_points.metric_name
+                      AND p.timestamp     = metric_points.timestamp
+                      AND p.deployment   <> ?
+              )
+            """,
+            (resource_name, AGGREGATE_DEPLOYMENT, window_start, AGGREGATE_DEPLOYMENT))
+        if cur.rowcount:
+            log.info("  %s: dropped %d superseded (all) row(s)",
+                     resource_name, cur.rowcount)
+        log.info("  %s: %d point(s)", resource_name, len(points))
+    conn.commit()
+    log.info("Backfill wrote %d metric point(s) over the last %d day(s)", written, days)
+    conn.close()
+
+
 def repair_names_only():
     """--repair-saas-names: re-attribute cached SaaS rows, no Cost Management call.
 
@@ -1001,6 +1069,12 @@ if __name__ == "__main__":
     # for a deep one-time fill of the past-month dashboard views. Routine runs use
     # the small rolling window (BILLING_LOOKBACK_MONTHS) to stay light on the
     # Cost Management rate limit.
+    if "--backfill-metrics" in sys.argv:
+        # One-shot: re-fetch Azure Monitor history with the current collector.
+        i = sys.argv.index("--backfill-metrics")
+        n = int(sys.argv[i + 1]) if i + 1 < len(sys.argv) and sys.argv[i + 1].isdigit() else 90
+        backfill_metrics(n)
+        sys.exit(0)
     if "--repair-saas-names" in sys.argv:
         # One-shot maintenance: heal historical rows, then exit.
         repair_names_only()

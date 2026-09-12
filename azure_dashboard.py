@@ -555,7 +555,8 @@ def group_by_month(billed_rows):
     return months
 
 
-def build_month_payload(rows, budget, canonical=None, saas_labels=None):
+def build_month_payload(rows, budget, canonical=None, saas_labels=None,
+                        model_rows=None, ym=None):
     # Cost Management lowercases resource names while discovery/metrics keep the
     # created casing. Fold billing onto the created casing so a resource isn't
     # split into two rows (e.g. belo2-yhf vs BELO2-YHF). `canonical` maps
@@ -573,7 +574,9 @@ def build_month_payload(rows, budget, canonical=None, saas_labels=None):
     billed = round(sum(c for _, c in daily), 2)
     pct = round((billed / budget) * 100, 1) if budget else 0.0
 
-    resources = [{"name": n, "billed": round(b, 2), "idle": round(b, 2) == 0.0}
+    model_rows = model_rows or {}
+    resources = [{"name": n, "billed": round(b, 2), "idle": round(b, 2) == 0.0,
+                  "models": model_rows.get((ym, n.lower()), [])}
                  for n, b in res_billed.items()]
     resources.sort(key=lambda r: r["billed"], reverse=True)
 
@@ -590,31 +593,49 @@ def build_month_payload(rows, budget, canonical=None, saas_labels=None):
     }
 
 
-def _model_rows(entry):
-    """Per-model activity for a resource, biggest output first.
+def load_model_rows(conn):
+    """{(YYYY-MM, resource_lower): [ {name, input, output, cached, calls}, ... ]}
 
-    Reports input / output / cached separately rather than one total. Output is
-    the cost driver (5x input's price); cached reads are billed at 0.1x and sit
-    OUTSIDE TotalTokens, so a single total both hides them and understates real
-    traffic. Drops the "(all)" pseudo-deployment (an account total, not a model)
-    and anything with no activity, so the list is the models that actually ran.
+    Per-model activity for EVERY month, read from metric_points. This is the single
+    source for the model breakdown: verified to reproduce the live snapshot's
+    by_deployment numbers exactly, so past and current months come from one place
+    rather than the snapshot for "now" and something else for history.
+
+    Azure Monitor keeps ~93 days, and collection started 2026-04, so older months
+    simply have no rows -- they get no model list rather than a row of zeros.
     """
-    out = []
-    for d in entry.get("by_deployment", []) or []:
-        name = d.get("deployment") or ""
-        if name == "(all)" or not name:
-            continue
-        row = {
-            "name": name,
-            "input": d.get("prompt_tokens") or 0,
-            "output": d.get("completion_tokens") or 0,
-            "cached": d.get("cached_tokens") or 0,
-            "calls": d.get("calls") or 0,
-        }
-        if not any((row["input"], row["output"], row["cached"], row["calls"])):
-            continue
-        out.append(row)
-    out.sort(key=lambda m: (m["output"], m["cached"], m["input"]), reverse=True)
+    buckets = {"prompt_tokens": "input", "completion_tokens": "output",
+               "cached_tokens": "cached", "calls": "calls"}
+    acc = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
+    for ym, rname, dep, metric, total in conn.execute(
+        """
+        SELECT substr(timestamp, 1, 7), resource_name, deployment, metric_name, SUM(value)
+        FROM metric_points
+        WHERE deployment <> '(all)' AND metric_name IN
+              ('prompt_tokens', 'completion_tokens', 'cached_tokens', 'calls')
+        GROUP BY 1, 2, 3, 4
+        """
+    ):
+        acc[(ym, (rname or "").lower())][dep][buckets[metric]] += total or 0.0
+
+    out = {}
+    for key, deps in acc.items():
+        rows = []
+        for dep, vals in deps.items():
+            row = {"name": dep,
+                   "input": int(vals.get("input", 0)),
+                   "output": int(vals.get("output", 0)),
+                   "cached": int(vals.get("cached", 0)),
+                   # None, not 0, when the per-deployment calls metric never covered
+                   # this month: ModelRequests reaches back ~31 days while the token
+                   # metrics go further, so older months know the tokens but not the
+                   # call count. Rendering 0 there would assert something false.
+                   "calls": int(vals["calls"]) if "calls" in vals else None}
+            if any((row["input"], row["output"], row["cached"], row["calls"] or 0)):
+                rows.append(row)
+        if rows:
+            rows.sort(key=lambda m: (m["output"], m["cached"], m["input"]), reverse=True)
+            out[key] = rows
     return out
 
 
@@ -646,7 +667,6 @@ def build_roster(snapshot):
                 "tokens": r.get("total_tokens"),
                 "calls": r.get("calls"),
                 "status": r.get("status"),  # "removed" for resources no longer in RG
-                "models": _model_rows(r),
             }
             seen[name] = row
             roster.append(row)
@@ -655,9 +675,6 @@ def build_roster(snapshot):
         for k, src_key in (("tokens", "total_tokens"), ("calls", "calls")):
             if r.get(src_key) is not None:
                 row[k] = (row.get(k) or 0) + (r.get(src_key) or 0)
-        row["models"] = sorted(row.get("models", []) + _model_rows(r),
-                               key=lambda m: (m["output"], m["cached"], m["input"]),
-                               reverse=True)
         if not r.get("status"):
             row["status"] = None  # a live entry outranks a "removed" one
     return roster
@@ -710,6 +727,7 @@ def build_context(db_path=None):
             if p.get("month_to_date", {}).get("billed_source") == "live":
                 billed_refreshed_at = p.get("generated_at", "") or billed_refreshed_at
                 break
+    model_rows = load_model_rows(conn)
     conn.close()
 
     budget = snapshot.get("monthly_budget_usd", 0.0)
@@ -729,7 +747,8 @@ def build_context(db_path=None):
               for (d, rn, m, c, rid) in billed_rows]
     saas_labels, _inferred = resolve_saas_labels(
         folded, snapshot.get("deployments_by_account", {}))
-    payloads = {ym: build_month_payload(months[ym], budget, canonical, saas_labels)
+    payloads = {ym: build_month_payload(months[ym], budget, canonical, saas_labels,
+                                        model_rows, ym)
                 for ym in month_keys}
 
     return {
