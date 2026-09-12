@@ -670,7 +670,12 @@ def load_model_rows(conn):
                    "calls": int(vals["calls"]) if "calls" in vals else None}
             if any((row["input"], row["output"], row["cached"], row["calls"] or 0)):
                 rows.append(row)
-        if rows:
+        # Only publish a COMPLETE breakdown. If any model in this resource-month is
+        # missing its call count, the list is partial and is dropped entirely rather
+        # than shown with gaps -- a half-filled expander invites the reader to compare
+        # models that are not measured the same way. Billing for the month is
+        # unaffected; it just gets no expander.
+        if rows and all(m["calls"] is not None for m in rows):
             rows.sort(key=lambda m: (m["output"], m["cached"], m["input"]), reverse=True)
             out[key] = rows
     return out
