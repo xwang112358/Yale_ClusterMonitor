@@ -63,14 +63,15 @@ FAMILY_COLORS = {
     "o3":        "#f97316",
     "o1-mini":   "#facc15",
     "o1":        "#eab308",
-    # Foundry-hosted Anthropic models: one hue stepped dark->light by tier, kept
-    # rose-shifted so it stays clear of the o-series oranges.
-    "claude-opus-4.8": "#802f35",
-    "claude-opus-4.6": "#a8484a",
-    "claude-sonnet-5": "#cc6b64",
-    "claude-sonnet-4": "#e29a90",
-    "claude-haiku-4":  "#f2c4bb",
-    "claude":    "#d97757",
+    # Foundry-hosted Anthropic models: one hue stepped dark->light by capability
+    # tier, rose-shifted so it stays clear of the o-series oranges.
+    "claude-opus-4.8":   "#802f35",
+    "claude-opus-4.6":   "#9c414a",
+    "claude-sonnet-5":   "#b9575d",
+    "claude-sonnet-4.6": "#d17a72",
+    "claude-sonnet-4.5": "#e5a396",
+    "claude-haiku-4.5":  "#f5cbc0",
+    "claude":    "#d97757",  # unknown / unresolved model
     "embed":     "#16a34a",
     "other":     "#64748b",
 }
@@ -100,26 +101,102 @@ MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
 
 
 # Azure AI Foundry bills Anthropic models through a Marketplace SaaS resource
-# named '<model>-<parent>-<uid>', and they all share one generic meter, so the
-# model is recoverable only from the resource id. Kept in sync with
+# named '<model>-<parent>-<uid>'; all of them share one generic meter, and
+# <model> is clipped to 15 chars so claude-sonnet-4-5 and claude-sonnet-4-6 both
+# arrive as 'claude-sonnet-4'. Resolve against the account's deployment roster
+# and only name a version when the match is unambiguous. Kept in sync with
 # azure_dashboard.py (this module stays standalone by design).
 SAAS_MODEL_RE = re.compile(
     r"/providers/microsoft\.saas/resources/(?P<model>.+)-[0-9a-f]{15}-[0-9a-f]{32}$",
     re.I)
 CLAUDE_METER_RE = re.compile(
     r"^Claude in Microsoft Foundry\s*\(([^)]+)\).*?([a-z0-9\-]+units)\s*$", re.I)
+AMBIGUOUS = "…"
 
 
-def saas_model_family(resource_id):
-    """'claude-opus-4.6' from a Foundry SaaS resource id, else None."""
+def saas_model_token(resource_id):
     m = SAAS_MODEL_RE.search(resource_id or "")
-    if not m:
-        return None
-    token = m.group("model").lower().rstrip("-")
-    parts = token.rsplit("-", 2)
+    return m.group("model").lower() if m else None
+
+
+def _pretty_model(name):
+    parts = name.lower().rstrip("-").rsplit("-", 2)
     if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
-        token = parts[0] + "-" + parts[1] + "." + parts[2]
-    return token
+        return parts[0] + "-" + parts[1] + "." + parts[2]
+    return name.lower().rstrip("-")
+
+
+def _deployment_records(entry):
+    """Normalise a roster entry to [{'name','created'}]; tolerates the older
+    plain-list-of-names snapshots."""
+    out = []
+    for d in entry or []:
+        if isinstance(d, str):
+            out.append({"name": d, "created": ""})
+        elif isinstance(d, dict) and d.get("name"):
+            out.append({"name": d["name"], "created": d.get("created") or ""})
+    return out
+
+
+def resolve_saas_labels(billed_rows, deployments_by_account):
+    """{resource_id: label} for Foundry Marketplace rows, exact where provable.
+
+    Nothing here is Anthropic-specific: any provider Foundry bills through a
+    Marketplace SaaS resource (Anthropic, DeepSeek, Mistral, ...) is named
+    '<model clipped to 15 chars>-<account prefix>-<uid>' and resolves the same
+    way, against whatever deployments the owning account actually has.
+
+    Three cases, in order:
+      1. the clipped token prefix-matches exactly one deployment -> that model;
+      2. it matches several (claude-sonnet-4-5 vs -4-6 both clip to
+         'claude-sonnet-4'), and the colliding deployments and marketplace
+         resources can be lined up 1:1 -- creation order matched against
+         first-billed order -- so pair them in order. Both orderings must agree
+         and be free of ties, otherwise we do not guess;
+      3. anything else stays unresolved, marked with a trailing ellipsis.
+    Returns (labels, inferred) where `inferred` holds the ids resolved by (2).
+    """
+    by_account = {a.lower(): _deployment_records(v)
+                  for a, v in (deployments_by_account or {}).items()}
+
+    # first-billed day per marketplace resource, and its clipped token
+    first_seen, token_of, account_of = {}, {}, {}
+    for usage_date, rname, _m, _c, rid in billed_rows:
+        token = saas_model_token(rid)
+        if not token:
+            continue
+        token_of[rid] = token
+        account_of[rid] = (rname or "").lower()
+        if rid not in first_seen or usage_date < first_seen[rid]:
+            first_seen[rid] = usage_date
+
+    labels, inferred = {}, set()
+    # group colliding resources by (account, clipped token)
+    groups = defaultdict(list)
+    for rid, token in token_of.items():
+        groups[(account_of[rid], token)].append(rid)
+
+    for (account, token), rids in groups.items():
+        cands = [d for d in by_account.get(account, [])
+                 if d["name"].lower().startswith(token)]
+        if len(cands) == 1:
+            for rid in rids:
+                labels[rid] = _pretty_model(cands[0]["name"])
+            continue
+        # Pair 1:1 only when both orderings are complete and unambiguous.
+        created = [c.get("created") or "" for c in cands]
+        billed = [first_seen.get(r, "") for r in rids]
+        if (len(cands) == len(rids) > 1
+                and all(created) and len(set(created)) == len(created)
+                and all(billed) and len(set(billed)) == len(billed)):
+            for c, rid in zip(sorted(cands, key=lambda x: x["created"]),
+                              sorted(rids, key=lambda r: first_seen[r])):
+                labels[rid] = _pretty_model(c["name"])
+                inferred.add(rid)
+        else:
+            for rid in rids:
+                labels[rid] = _pretty_model(token) + (AMBIGUOUS if cands else "")
+    return labels, inferred
 
 
 def short_meter(meter):
@@ -130,16 +207,30 @@ def short_meter(meter):
     return f"Claude · {m.group(1)} · {m.group(2)}" if m else meter
 
 
+def _meter_lines(pairs):
+    """Tooltip lines for (meter, cost) pairs, identical meters summed.
+
+    Foundry bills every Claude model under one meter, so a month's rows repeat
+    the same meter once per day; collapse them instead of listing duplicates.
+    """
+    agg = defaultdict(float)
+    for m, c in pairs:
+        agg[short_meter(m)] += c
+    rows = sorted(agg.items(), key=lambda mc: mc[1], reverse=True)
+    return "<br>".join(f"  · {m}  <b>${c:,.2f}</b>" for m, c in rows) or "  (no meters)"
+
+
 def family_color(fam):
     if fam in FAMILY_COLORS:
         return FAMILY_COLORS[fam]
+    base = fam.rstrip(AMBIGUOUS)
+    kin = sorted(k for k in FAMILY_COLORS if k.startswith(base) and k != "claude")
+    if kin:
+        return FAMILY_COLORS[kin[0]]
     return FAMILY_COLORS["claude" if fam.startswith("claude") else "other"]
 
 
-def model_family(meter: str, resource_id=None) -> str:
-    fam = saas_model_family(resource_id)
-    if fam:
-        return fam
+def model_family(meter: str) -> str:
     if not meter:
         return "other"
     for pat, name in FAMILY_PATTERNS:
@@ -202,7 +293,7 @@ def _base_layout(extra):
     return base
 
 
-def stacked_bar_figure(billed_rows):
+def stacked_bar_figure(billed_rows, saas_labels=None):
     """One trace per model family; each trace has one bar per resource.
 
     Resources whose billing nets to $0 for the month (e.g. offset by a credit)
@@ -210,8 +301,9 @@ def stacked_bar_figure(billed_rows):
     """
     res_family_cost = defaultdict(lambda: defaultdict(float))
     res_family_meters = defaultdict(lambda: defaultdict(list))
+    saas_labels = saas_labels or {}
     for usage_date, resource_name, meter, cost, resource_id in billed_rows:
-        fam = model_family(meter, resource_id)
+        fam = saas_labels.get(resource_id) or model_family(meter)
         res_family_cost[resource_name][fam] += cost
         res_family_meters[resource_name][fam].append((meter, cost))
 
@@ -237,11 +329,7 @@ def stacked_bar_figure(billed_rows):
         for r in resources_sorted:
             total = res_family_cost[r].get(fam, 0.0)
             xs.append(total)
-            meters_detail = sorted(res_family_meters[r].get(fam, []),
-                                   key=lambda mc: mc[1], reverse=True)
-            meter_lines = "<br>".join(
-                f"  · {short_meter(m)}  <b>${c:,.2f}</b>" for m, c in meters_detail
-            ) or "  (no meters)"
+            meter_lines = _meter_lines(res_family_meters[r].get(fam, []))
             hovers.append(
                 f"<b style='font-size:13px;'>{r}</b><br>"
                 f"<span style='color:#6c8cff;'>model: <b>{fam}</b></span>  ·  "
@@ -281,82 +369,83 @@ def stacked_bar_figure(billed_rows):
     return fig
 
 
-def cumulative_line_figure(daily, budget):
-    if not daily:
-        return None
-    days = [r[0] for r in daily]
-    cumulative, running = [], 0.0
-    for _, c in daily:
-        running += c or 0.0
-        cumulative.append(running)
+def daily_and_cumulative_figure(daily, budget):
+    """Lab-wide daily spend (bars) + running month total (line) on one $ axis.
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=days, y=cumulative, mode="lines+markers",
-        line=dict(color=ACCENT, width=2),
-        marker=dict(size=7, color=ACCENT, line=dict(color=BG, width=1)),
-        fill="tozeroy", fillcolor="rgba(108, 140, 255, 0.12)",
-        hovertemplate="<b>%{x}</b><br>Cumulative: $%{y:,.2f}<extra></extra>",
-        name="Cumulative billed",
-    ))
-    fig.add_hline(
-        y=budget, line=dict(color=RED, dash="dash", width=1.5),
-        annotation_text=f"Monthly budget ${budget:,.0f}",
-        annotation_position="top left", annotation_font=dict(color=RED, size=10),
-    )
-    crossed = next((i for i, v in enumerate(cumulative) if v >= budget), None)
-    if crossed is not None:
-        fig.add_trace(go.Scatter(
-            x=[days[crossed]], y=[cumulative[crossed]], mode="markers",
-            marker=dict(size=12, color=RED, symbol="x-thin",
-                        line=dict(width=2, color=RED)),
-            hovertemplate=f"<b>Budget crossed</b><br>{days[crossed]}: ${cumulative[crossed]:,.2f}<extra></extra>",
-            showlegend=False,
-        ))
-    fig.update_layout(**_base_layout(dict(
-        xaxis=dict(gridcolor=CARD_BORDER, zerolinecolor=CARD_BORDER),
-        yaxis=dict(tickprefix="$", tickformat=",.0f",
-                   gridcolor=CARD_BORDER, zerolinecolor=CARD_BORDER),
-        showlegend=False, height=320,
-    )))
-    return fig
-
-
-def daily_line_figure(daily, budget):
+    Both series are USD and the line is the running sum of the bars, so a second
+    y-scale would only let them be drawn at arbitrary relative heights. The
+    budget is an order of magnitude above a normal month, so it is drawn only
+    once actually crossed; until then the pace and burn rate live in the
+    subtitle.
+    """
     if not daily:
         return None
     days = [r[0] for r in daily]
     costs = [r[1] or 0.0 for r in daily]
-    burn = budget / 30.0
+    cum, running = [], 0.0
+    for c in costs:
+        running += c
+        cum.append(running)
+
+    total = cum[-1] if cum else 0.0
+    burn = budget / 30.0 if budget else 0.0
+    pct = (total / budget * 100.0) if budget else 0.0
+    show_budget = bool(budget) and total >= budget
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=days, y=costs, mode="lines+markers",
-        line=dict(color=GREEN, width=2),
-        marker=dict(size=7, color=GREEN, line=dict(color=BG, width=1)),
-        fill="tozeroy", fillcolor="rgba(76, 175, 80, 0.15)",
-        hovertemplate="<b>%{x}</b><br>$%{y:,.2f}<extra></extra>", name="Daily billed",
+    fig.add_trace(go.Bar(
+        x=days, y=costs, name="daily",
+        marker=dict(color=GREEN, line=dict(color=BG, width=0.5)),
+        hovertemplate="<b>%{x}</b><br>Daily: $%{y:,.2f}<extra></extra>",
     ))
-    fig.add_hline(
-        y=burn, line=dict(color=RED, dash="dash", width=1),
-        annotation_text=f"On-budget burn: ${burn:,.0f}/day",
-        annotation_position="top left", annotation_font=dict(color=TEXT_DIM, size=10),
-    )
+    fig.add_trace(go.Scatter(
+        x=days, y=cum, name="cumulative", mode="lines+markers",
+        line=dict(color=ACCENT, width=2),
+        marker=dict(size=7, color=ACCENT, line=dict(color=BG, width=1)),
+        hovertemplate="<b>%{x}</b><br>Cumulative: $%{y:,.2f}<extra></extra>",
+    ))
+    if show_budget:
+        fig.add_hline(y=budget, line=dict(color=RED, dash="dash", width=1.5),
+                      annotation_text=f"monthly budget ${budget:,.0f}",
+                      annotation_position="top left",
+                      annotation_font=dict(color=RED, size=10))
+        crossed = next((i for i, v in enumerate(cum) if v >= budget), None)
+        if crossed is not None:
+            fig.add_trace(go.Scatter(
+                x=[days[crossed]], y=[cum[crossed]], mode="markers",
+                marker=dict(size=12, color=RED, symbol="x-thin",
+                            line=dict(width=2, color=RED)),
+                hovertemplate=(f"<b>Budget crossed</b><br>{days[crossed]}: "
+                               f"${cum[crossed]:,.2f}<extra></extra>"),
+                showlegend=False,
+            ))
+
+    sub = f"month to date ${total:,.2f}"
+    if budget:
+        sub += (f" · {pct:.1f}% of ${budget:,.0f} budget"
+                f" · on-budget burn ${burn:,.0f}/day")
     fig.update_layout(**_base_layout(dict(
+        barmode="overlay",
         xaxis=dict(gridcolor=CARD_BORDER, zerolinecolor=CARD_BORDER),
-        yaxis=dict(tickprefix="$", tickformat=",.0f",
-                   gridcolor=CARD_BORDER, zerolinecolor=CARD_BORDER),
-        showlegend=False, height=320,
+        yaxis=dict(title="USD", tickprefix="$", tickformat=",.0f",
+                   gridcolor=CARD_BORDER, zerolinecolor=CARD_BORDER, rangemode="tozero"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                    bgcolor="rgba(0,0,0,0)", font=dict(color=TEXT, size=11)),
+        height=360, margin=dict(t=64),
+        annotations=[dict(text=sub, x=0, y=1.13, xref="paper", yref="paper",
+                          showarrow=False, font=dict(color=TEXT_DIM, size=11),
+                          xanchor="left")],
     )))
     return fig
 
 
-def per_resource_daily_figure(billed_rows):
+def per_resource_daily_figure(billed_rows, saas_labels=None):
     by_res = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
     detail = defaultdict(lambda: defaultdict(list))
     all_days = set()
+    saas_labels = saas_labels or {}
     for usage_date, resource_name, meter, cost, resource_id in billed_rows:
-        fam = model_family(meter, resource_id)
+        fam = saas_labels.get(resource_id) or model_family(meter)
         by_res[resource_name][usage_date][fam] += cost
         detail[resource_name][(usage_date, fam)].append((meter, cost))
         all_days.add(usage_date)
@@ -384,8 +473,7 @@ def per_resource_daily_figure(billed_rows):
             hovers = []
             for d in days_sorted:
                 v = by_res[r][d].get(fam, 0.0)
-                meters = sorted(detail[r].get((d, fam), []), key=lambda mc: mc[1], reverse=True)
-                meter_lines = "<br>".join(f"  · {short_meter(m)}  <b>${c:,.2f}</b>" for m, c in meters) or "  (no meters)"
+                meter_lines = _meter_lines(detail[r].get((d, fam), []))
                 hovers.append(
                     f"<b>{r}</b>  ·  {d}<br>"
                     f"<span style='color:#6c8cff;'>model: <b>{fam}</b></span>  ·  <b>${v:,.2f}</b><br>"
@@ -462,7 +550,7 @@ def fig_json(fig):
     return json.loads(fig.to_json()) if fig is not None else None
 
 
-def build_month_payload(ym, rows, budget, canonical=None):
+def build_month_payload(ym, rows, budget, canonical=None, saas_labels=None):
     """Per-month billing payload: KPIs, figures, and a billed-by-resource table.
 
     The 'live roster' (all currently discovered resources, including idle/new
@@ -493,10 +581,9 @@ def build_month_payload(ym, rows, budget, canonical=None):
     resources.sort(key=lambda r: r["billed"], reverse=True)
 
     figs = {
-        "stacked": fig_json(stacked_bar_figure(rows)),
-        "daily": fig_json(daily_line_figure(daily, budget)),
-        "cumulative": fig_json(cumulative_line_figure(daily, budget)),
-        "per_resource": fig_json(per_resource_daily_figure(rows)),
+        "stacked": fig_json(stacked_bar_figure(rows, saas_labels)),
+        "daily_cumulative": fig_json(daily_and_cumulative_figure(daily, budget)),
+        "per_resource": fig_json(per_resource_daily_figure(rows, saas_labels)),
     }
     return {
         "billed": billed,
@@ -660,12 +747,9 @@ PAGE = r"""<!DOCTYPE html>
   <span class="hint">stacked by model family · hover a segment · ○ = no billed spend yet</span></div>
 <div class="panel"><div id="fig-stacked" class="plotly-host"></div></div>
 
-<div class="panel-row">
-  <div><div class="section-title">Daily billed<span class="hint">selected month</span></div>
-       <div class="panel"><div id="fig-daily" class="plotly-host"></div></div></div>
-  <div><div class="section-title">Cumulative<span class="hint">vs monthly budget</span></div>
-       <div class="panel"><div id="fig-cumulative" class="plotly-host"></div></div></div>
-</div>
+<div class="section-title">Daily &amp; cumulative spend
+  <span class="hint">whole lab · bars = that day · line = running month total</span></div>
+<div class="panel"><div id="fig-daily-cumulative" class="plotly-host"></div></div>
 
 <div class="section-title">Per-resource daily trend
   <span class="hint">pick a resource from the dropdown · sorted by spend</span></div>
@@ -690,7 +774,7 @@ const ROSTER = __ROSTER_JSON__;        // all currently discovered resources (li
 const SNAP_ESTIMATED = __SNAP_ESTIMATED__;  // token-based estimate, current MTD
 const MLAB = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const PLOT_CFG = {displaylogo:false, responsive:true, modeBarButtonsToRemove:["lasso2d","select2d"]};
-const FIGS = ["stacked","daily","cumulative","per_resource"];
+const FIGS = ["stacked","daily_cumulative","per_resource"];
 
 let selected = null;       // "YYYY-MM"
 let followCurrent = true;  // auto-advance on rollover until the user navigates
@@ -834,7 +918,7 @@ function renderMonth(key) {
 
   // figures
   FIGS.forEach(f => {
-    const divId = "fig-" + (f === "per_resource" ? "per-resource" : f);
+    const divId = "fig-" + f.replace(/_/g, "-");
     const fig = data && data.figs[f];
     if (fig) { Plotly.react(divId, fig.data, fig.layout, PLOT_CFG); }
     else { emptyFig(divId, data ? "No data for this chart."
@@ -919,7 +1003,12 @@ def render(snapshot, billed_rows):
 
     roster, snap_estimated = build_roster(snapshot)
     canonical = {r["name"].lower(): r["name"] for r in roster}
-    payloads = {ym: build_month_payload(ym, months[ym], budget, canonical) for ym in month_keys}
+    folded = [(d, canonical.get(rn.lower(), rn), m, c, rid)
+              for (d, rn, m, c, rid) in billed_rows]
+    saas_labels, _inferred = resolve_saas_labels(
+        folded, snapshot.get("deployments_by_account", {}))
+    payloads = {ym: build_month_payload(ym, months[ym], budget, canonical, saas_labels)
+                for ym in month_keys}
 
     html = PAGE
     repl = {

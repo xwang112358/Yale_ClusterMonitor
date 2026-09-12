@@ -263,12 +263,9 @@
   <span class="hint">stacked by model family &middot; hover a segment &middot; &#9711; = no billed spend yet</span></div>
 <div class="panel"><div id="fig-stacked" class="plotly-host"></div></div>
 
-<div class="panel-row">
-  <div><div class="section-title">Daily billed<span class="hint">selected month</span></div>
-       <div class="panel"><div id="fig-daily" class="plotly-host"></div></div></div>
-  <div><div class="section-title">Cumulative<span class="hint">vs monthly budget</span></div>
-       <div class="panel"><div id="fig-cumulative" class="plotly-host"></div></div></div>
-</div>
+<div class="section-title">Daily &amp; cumulative spend
+  <span class="hint">whole lab &middot; bars = that day &middot; line = running month total</span></div>
+<div class="panel"><div id="fig-daily-cumulative" class="plotly-host"></div></div>
 
 <div class="section-title">Per-resource daily trend
   <span class="hint">pick a resource from the dropdown &middot; sorted by spend</span></div>
@@ -298,7 +295,7 @@ const BILLED_REFRESHED_AT = {{ ctx.billed_refreshed_at|tojson }};
 const ESTIMATE_REFRESHED_AT = {{ ctx.generated_at|tojson }};
 const MLAB = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const PLOT_CFG = {displaylogo:false, responsive:true, modeBarButtonsToRemove:["lasso2d","select2d"]};
-const FIGS = ["stacked","daily","cumulative","per_resource"];
+const FIGS = ["stacked","daily_cumulative","per_resource"];
 
 let selected = null;       // "YYYY-MM"
 let followCurrent = true;  // auto-advance on rollover until the user navigates
@@ -450,7 +447,7 @@ function renderMonth(key) {
       : estUpdated + " · gap vs billed " + fmtMoney(billed - est);
 
   FIGS.forEach(f => {
-    const divId = "fig-" + (f === "per_resource" ? "per-resource" : f);
+    const divId = "fig-" + f.replace(/_/g, "-");
     const fig = data && data.figs[f];
     if (fig) { Plotly.react(divId, fig.data, fig.layout, PLOT_CFG); }
     else { emptyFig(divId, data ? "No data for this chart."

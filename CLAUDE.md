@@ -97,13 +97,25 @@ Non-interactive ssh: `ssh -o BatchMode=yes -o ConnectTimeout=12 root@159.223.173
   `saas_parent_name()` folds the row onto the account; `repair_saas_resource_names()`
   heals rows already in the DB (`billed_costs` keeps `resource_id`, so this is offline —
   no Cost Management call). Run `python usage_monitor.py --repair-saas-names` after deploy.
-  `<model>` is clipped to 15 chars, so `claude-haiku-4-` arrives truncated and a bare
-  `claude-sonnet-4` may be a clipped 4.5 — don't try to reconstruct the full version.
+- **The marketplace name clips the model to 15 chars**, so `claude-haiku-4-5` arrives as
+  `claude-haiku-4-` and BOTH `claude-sonnet-4-5` and `claude-sonnet-4-6` arrive as
+  `claude-sonnet-4`. Never display that token as the version — it names a model that may
+  not exist. `resolve_saas_labels()` resolves it against the account's real deployment
+  roster (`discover_deployments()`, stored in the snapshot as `deployments_by_account`):
+  a unique prefix match names the model; a collision is paired 1:1 by **creation order
+  cross-checked against first-billed order** (the marketplace resource is minted with the
+  deployment, so the two orders agree); anything else stays unresolved with a trailing
+  ellipsis. Nothing in it is Anthropic-specific — DeepSeek/Mistral resolve identically.
 - **All Claude models share ONE meter** (`Claude in Microsoft Foundry (Anthropic hosted)
-  - claude-ccu-anthropic-hosted-plan - claude-consumption-units`). The model is recoverable
-  only from the resource id, which is why `model_family()` takes `resource_id` and lets it
-  win over the meter. Keep `dashboard.py` in sync — it deliberately duplicates this
-  (it must stay standalone).
+  - claude-ccu-anthropic-hosted-plan - claude-consumption-units`) because CCU is a pooled
+  unit. The model is NOT in the meter, and the SaaS resource 404s in ARM, so the deployment
+  roster is the only route. Older PAYGO meters (`Claude Sonnet 4.5 - anthropic-... -
+  paygo-inference-output-tokens`) do name the model; `model_family()` still handles those.
+- **Don't probe Cost Management for extra grouping dimensions.** Tried `ProductOrderName` /
+  `MeterSubcategory` to get the model authoritatively — instant 429. One call per 4h run is
+  the whole budget.
+- Keep `dashboard.py` in sync with `azure_dashboard.py` — it deliberately duplicates the
+  resolver and palette (it must stay standalone for the pipeline dir).
 - **Resource-name casing.** Cost Management lowercases names (`belo2-yhf`); RM/metrics keep the created
   casing (`BELO2-YHF`). ALL resource-name matching must be **case-insensitive**; display prefers the
   created casing. Do not reintroduce case-sensitive `==` on resource names.
@@ -112,7 +124,17 @@ Non-interactive ssh: `ssh -o BatchMode=yes -o ConnectTimeout=12 root@159.223.173
   (daily $ per resource+meter, names as Cost Management returns them = lowercase), `snapshots` (latest
   rollup the dashboard's roster comes from).
 
-## Validating dashboard changes (no node/playwright on these boxes)
+## Charts
+- `/azure` shows ONE combined "Daily & cumulative spend" panel (bars = that day, line =
+  running month total) on a **single $ axis** — both series are USD and the line is the
+  running sum of the bars, so a second y-scale would only let them be drawn at arbitrary
+  relative heights. The $2,000 budget is an order of magnitude above a normal month, so it
+  is drawn only once actually crossed; until then pace + burn live in the subtitle.
+- Model families are coloured per-hue ramps (gpt-5.x purple, gpt-4.x blue, Claude rose).
+  The Claude ramp is validated as an *ordinal* ramp against the `#0f1117` surface.
+
+## Validating dashboard changes
+- `node` IS available on the Windows box (v24) even though the droplet has none.
 - `/azure` requires login, so `curl` returns 302. Test the data layer directly:
   `AZURE_USAGE_DB=<db> python -c "from azure_dashboard import build_context; print(build_context().keys())"`.
 - To eyeball the rendered page: render `azure.html` offline (stub Flask `url_for`, swap the CDN Plotly

@@ -305,6 +305,53 @@ def fetch_account_internal_ids(credential, subscription_id, accounts):
     return parents
 
 
+def discover_deployments(credential, subscription_id, accounts):
+    """Map account name -> [deployment names] via ARM.
+
+    The SaaS resource name clips the model to 15 chars, so two deployments can
+    collapse to the same token (claude-sonnet-4-5 and claude-sonnet-4-6 both
+    become 'claude-sonnet-4'). The dashboard resolves the token against this
+    roster: a unique prefix match names the model exactly, anything else stays
+    deliberately unresolved rather than asserting a version we cannot prove.
+    """
+    token = credential.get_token("https://management.azure.com/.default").token
+    headers = {"Authorization": f"Bearer {token}"}
+    out = {}
+    for name, rid in accounts:
+        low = (rid or "").lower()
+        if "/providers/microsoft.cognitiveservices/accounts/" not in low:
+            continue
+        if "/projects/" in low:
+            continue
+        try:
+            resp = requests.get(
+                f"https://management.azure.com{rid}/deployments"
+                f"?api-version={ACCOUNTS_API_VERSION}", headers=headers, timeout=30)
+        except requests.RequestException as e:
+            log.warning("  deployment list failed for %s: %s", name, e)
+            continue
+        if resp.status_code != 200:
+            log.warning("  deployment list for %s -> HTTP %s", name, resp.status_code)
+            continue
+        deps = []
+        for d in resp.json().get("value", []):
+            if not d.get("name"):
+                continue
+            # createdAt breaks ties when two deployments share the clipped
+            # 15-char token (claude-sonnet-4-5 vs claude-sonnet-4-6): the
+            # marketplace resource is minted with the deployment, so creation
+            # order and first-billed order agree.
+            deps.append({
+                "name": d["name"],
+                "created": (d.get("systemData") or {}).get("createdAt") or "",
+                "model": ((d.get("properties") or {}).get("model") or {}).get("name") or "",
+                "format": ((d.get("properties") or {}).get("model") or {}).get("format") or "",
+            })
+        if deps:
+            out[name] = sorted(deps, key=lambda x: x["name"])
+    return out
+
+
 def saas_parent_name(resource_id, resource_name, parents):
     """Parent account name for a Marketplace SaaS billing row, else None."""
     if not parents or SAAS_TYPE_FRAGMENT not in (resource_id or "").lower():
@@ -672,6 +719,12 @@ def main(lookback_months: int = BILLING_LOOKBACK_MONTHS, query_cost: bool = True
             log.info("  %d account prefix(es) for SaaS attribution", len(saas_parents))
         except Exception as e:  # never let attribution break the poll
             log.warning("Could not build SaaS parent map: %s", e)
+    try:
+        deployments_by_account = discover_deployments(credential, SUBSCRIPTION_ID, accounts)
+        log.info("  deployment roster for %d account(s)", len(deployments_by_account))
+    except Exception as e:  # roster is a display nicety; never fail the poll for it
+        log.warning("Could not list deployments: %s", e)
+        deployments_by_account = {}
     healed = repair_saas_resource_names(conn, saas_parents)
     if healed:
         log.info("Re-attributed %d cached SaaS billing row(s) to parent accounts", healed)
@@ -837,6 +890,9 @@ def main(lookback_months: int = BILLING_LOOKBACK_MONTHS, query_cost: bool = True
         "generated_at": end.isoformat(),
         "resource_group": RESOURCE_GROUP,
         "monthly_budget_usd": MONTHLY_BUDGET_USD,
+        # account -> [deployment names]; lets the dashboard resolve the SaaS
+        # resource's clipped model token to the real model.
+        "deployments_by_account": deployments_by_account,
         "month_to_date": {
             "billed_cost_usd": billed_total,
             "billed_source": billed_source,
