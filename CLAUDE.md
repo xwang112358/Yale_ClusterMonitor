@@ -87,6 +87,23 @@ Non-interactive ssh: `ssh -o BatchMode=yes -o ConnectTimeout=12 root@159.223.173
   AIServices accounts + `accounts/projects` children: `InputTokens`/`OutputTokens`/`ModelRequests` (they
   reject the legacy names). `METRIC_BUCKETS` normalizes both into canonical buckets. Projects are
   discovered too, labelled `<child> (project)`.
+- **Foundry bills Anthropic models through a separate Marketplace SaaS resource.**
+  A Claude deployment on a Foundry account does NOT bill to that account. Cost Management
+  reports `.../providers/Microsoft.SaaS/resources/<model>-<parent>-<uid>` (e.g.
+  `claude-sonnet-4-dac2bdbdec684f4-...`), so the spend used to land as its own opaque row.
+  `<parent>` is the **first 15 hex chars of the hosting account's `properties.internalId`**
+  (ARM `GET <account>?api-version=2023-05-01`) — that prefix is the only link back.
+  `usage_monitor.fetch_account_internal_ids()` builds the map and
+  `saas_parent_name()` folds the row onto the account; `repair_saas_resource_names()`
+  heals rows already in the DB (`billed_costs` keeps `resource_id`, so this is offline —
+  no Cost Management call). Run `python usage_monitor.py --repair-saas-names` after deploy.
+  `<model>` is clipped to 15 chars, so `claude-haiku-4-` arrives truncated and a bare
+  `claude-sonnet-4` may be a clipped 4.5 — don't try to reconstruct the full version.
+- **All Claude models share ONE meter** (`Claude in Microsoft Foundry (Anthropic hosted)
+  - claude-ccu-anthropic-hosted-plan - claude-consumption-units`). The model is recoverable
+  only from the resource id, which is why `model_family()` takes `resource_id` and lets it
+  win over the meter. Keep `dashboard.py` in sync — it deliberately duplicates this
+  (it must stay standalone).
 - **Resource-name casing.** Cost Management lowercases names (`belo2-yhf`); RM/metrics keep the created
   casing (`BELO2-YHF`). ALL resource-name matching must be **case-insensitive**; display prefers the
   created casing. Do not reintroduce case-sensitive `==` on resource names.

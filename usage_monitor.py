@@ -27,6 +27,7 @@ Run once to test:
 import json
 import logging
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -256,6 +257,100 @@ def discover_accounts(credential, subscription_id, resource_group):
     return accounts + projects
 
 
+# Azure AI Foundry does not bill third-party (Anthropic) models through the
+# Cognitive Services account that hosts the deployment. It mints a Marketplace
+# SaaS resource per model and bills there instead:
+#   .../providers/Microsoft.SaaS/resources/claude-sonnet-4-<parent>-<uid>
+# <parent> is the first 15 hex chars of the hosting account's
+# properties.internalId (and <model> is clipped to 15 chars too, which is why
+# e.g. 'claude-haiku-4-' arrives with a trailing dash). That prefix is the only
+# link back to the account, so we resolve it and attribute the spend to the
+# account -- otherwise Claude usage shows up as its own opaque row in the
+# dashboard instead of stacking onto the resource that incurred it.
+SAAS_TYPE_FRAGMENT = "/providers/microsoft.saas/resources/"
+SAAS_RESOURCE_RE = re.compile(
+    r"^(?P<model>.+)-(?P<parent>[0-9a-f]{15})-(?P<uid>[0-9a-f]{32})$", re.I)
+ACCOUNTS_API_VERSION = "2023-05-01"
+INTERNAL_ID_PREFIX_LEN = 15
+
+
+def fetch_account_internal_ids(credential, subscription_id, accounts):
+    """Map <first 15 hex of internalId> -> account name, for SaaS attribution.
+
+    One ARM GET per Cognitive Services account. ARM is not rate-limited the way
+    Cost Management is, so this is safe to do on every run.
+    """
+    token = credential.get_token("https://management.azure.com/.default").token
+    headers = {"Authorization": f"Bearer {token}"}
+    parents = {}
+    for name, rid in accounts:
+        low = (rid or "").lower()
+        if "/providers/microsoft.cognitiveservices/accounts/" not in low:
+            continue
+        if "/projects/" in low:
+            continue  # project children inherit their parent's internalId
+        try:
+            resp = requests.get(
+                f"https://management.azure.com{rid}?api-version={ACCOUNTS_API_VERSION}",
+                headers=headers, timeout=30)
+        except requests.RequestException as e:
+            log.warning("  internalId lookup failed for %s: %s", name, e)
+            continue
+        if resp.status_code != 200:
+            log.warning("  internalId lookup for %s -> HTTP %s", name, resp.status_code)
+            continue
+        internal = ((resp.json().get("properties") or {}).get("internalId") or "")
+        if len(internal) >= INTERNAL_ID_PREFIX_LEN:
+            parents[internal[:INTERNAL_ID_PREFIX_LEN].lower()] = name
+    return parents
+
+
+def saas_parent_name(resource_id, resource_name, parents):
+    """Parent account name for a Marketplace SaaS billing row, else None."""
+    if not parents or SAAS_TYPE_FRAGMENT not in (resource_id or "").lower():
+        return None
+    m = SAAS_RESOURCE_RE.match(resource_name or "")
+    if not m:
+        return None
+    return parents.get(m.group("parent").lower())
+
+
+def has_unattributed_saas_rows(conn):
+    """True if any stored SaaS row still carries its raw marketplace name."""
+    rows = conn.execute(
+        "SELECT DISTINCT resource_name FROM billed_costs "
+        "WHERE lower(resource_id) LIKE ?", ("%" + SAAS_TYPE_FRAGMENT + "%",)
+    ).fetchall()
+    return any(SAAS_RESOURCE_RE.match(r[0] or "") for r in rows)
+
+
+def repair_saas_resource_names(conn, parents):
+    """Re-attribute already-stored SaaS rows to their parent account.
+
+    billed_costs keeps the full resource_id, so rows written before this mapping
+    existed can be healed in place with no Cost Management call. Idempotent: once
+    a row carries the account name it no longer matches SAAS_RESOURCE_RE.
+    """
+    if not parents:
+        return 0
+    rows = conn.execute(
+        "SELECT DISTINCT resource_id, resource_name FROM billed_costs "
+        "WHERE lower(resource_id) LIKE ?", ("%" + SAAS_TYPE_FRAGMENT + "%",)
+    ).fetchall()
+    fixed = 0
+    for rid, rname in rows:
+        parent = saas_parent_name(rid, rname, parents)
+        if not parent or parent == rname:
+            continue
+        cur = conn.execute(
+            "UPDATE billed_costs SET resource_name = ? WHERE resource_id = ?",
+            (parent, rid))
+        fixed += cur.rowcount
+        log.info("  re-attributed %s -> %s (%d row(s))", rname, parent, cur.rowcount)
+    conn.commit()
+    return fixed
+
+
 def _lookback_start(months: int) -> date:
     """First day of the month `months - 1` calendar months before this month."""
     first_this = datetime.now(timezone.utc).date().replace(day=1)
@@ -268,7 +363,8 @@ def _lookback_start(months: int) -> date:
 
 
 def query_cost_management(credential, subscription_id, resource_group,
-                          lookback_months: int = BILLING_LOOKBACK_MONTHS):
+                          lookback_months: int = BILLING_LOOKBACK_MONTHS,
+                          saas_parents=None):
     """Query Azure Cost Management for daily billed cost in the RG.
 
     Returns: list of dicts {usage_date, resource_id, resource_name, meter, cost_usd, currency}.
@@ -331,10 +427,14 @@ def query_cost_management(credential, subscription_id, resource_group,
         if usage_date.isdigit() and len(usage_date) == 8:
             usage_date = f"{usage_date[0:4]}-{usage_date[4:6]}-{usage_date[6:8]}"
         rid = row[idx["ResourceId"]] or ""
+        rname = rid.split("/")[-1] if rid else "(unknown)"
+        # Foundry-hosted Anthropic models bill through their own SaaS resource;
+        # attribute them to the account that hosts the deployment.
+        rname = saas_parent_name(rid, rname, saas_parents) or rname
         rows_out.append({
             "usage_date": usage_date,
             "resource_id": rid,
-            "resource_name": rid.split("/")[-1] if rid else "(unknown)",
+            "resource_name": rname,
             "meter": row[idx["Meter"]] if "Meter" in idx else "(no meter)",
             "cost_usd": float(row[idx["Cost"]]),
             "currency": row[idx["Currency"]] if "Currency" in idx else "USD",
@@ -561,6 +661,21 @@ def main(lookback_months: int = BILLING_LOOKBACK_MONTHS, query_cost: bool = True
         [n for n, _ in accounts],
     )
 
+    # Resolve <internalId prefix> -> account name so Foundry Marketplace (Anthropic)
+    # spend can be attributed to the account that hosts the deployment. Only needed
+    # when we are about to write new billing rows, or when old rows still carry a
+    # raw marketplace name -- keeps the 30-min metrics-only timer free of ARM calls.
+    saas_parents = {}
+    if query_cost or has_unattributed_saas_rows(conn):
+        try:
+            saas_parents = fetch_account_internal_ids(credential, SUBSCRIPTION_ID, accounts)
+            log.info("  %d account prefix(es) for SaaS attribution", len(saas_parents))
+        except Exception as e:  # never let attribution break the poll
+            log.warning("Could not build SaaS parent map: %s", e)
+    healed = repair_saas_resource_names(conn, saas_parents)
+    if healed:
+        log.info("Re-attributed %d cached SaaS billing row(s) to parent accounts", healed)
+
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=35)
 
@@ -634,7 +749,8 @@ def main(lookback_months: int = BILLING_LOOKBACK_MONTHS, query_cost: bool = True
             log.info("Querying Cost Management for billed cost (lookback %d month(s))...",
                      lookback_months)
             cost_rows = query_cost_management(credential, SUBSCRIPTION_ID, RESOURCE_GROUP,
-                                              lookback_months=lookback_months)
+                                              lookback_months=lookback_months,
+                                              saas_parents=saas_parents)
             log.info("  %d billed-cost rows", len(cost_rows))
             for r in cost_rows:
                 # Persist every row (all months) so past-month history accumulates...
@@ -758,11 +874,31 @@ def main(lookback_months: int = BILLING_LOOKBACK_MONTHS, query_cost: bool = True
     print(json.dumps(snapshot, indent=2))
 
 
+def repair_names_only():
+    """--repair-saas-names: re-attribute cached SaaS rows, no Cost Management call.
+
+    Lets the fix land on existing history immediately instead of waiting for the
+    next 4h full run (and without spending a Cost Management request).
+    """
+    credential = make_credential()
+    conn = init_db(DB_PATH)
+    accounts = discover_accounts(credential, SUBSCRIPTION_ID, RESOURCE_GROUP)
+    parents = fetch_account_internal_ids(credential, SUBSCRIPTION_ID, accounts)
+    log.info("Resolved %d account prefix(es)", len(parents))
+    healed = repair_saas_resource_names(conn, parents)
+    log.info("Re-attributed %d row(s)", healed)
+    conn.close()
+
+
 if __name__ == "__main__":
     # `--backfill [N]` pulls N months of billing history (default 13) in one run,
     # for a deep one-time fill of the past-month dashboard views. Routine runs use
     # the small rolling window (BILLING_LOOKBACK_MONTHS) to stay light on the
     # Cost Management rate limit.
+    if "--repair-saas-names" in sys.argv:
+        # One-shot maintenance: heal historical rows, then exit.
+        repair_names_only()
+        sys.exit(0)
     months = BILLING_LOOKBACK_MONTHS
     query_cost = True
     if "--metrics-only" in sys.argv:

@@ -10,3 +10,7 @@ nohup.out
 .flask_secret
 users.json
 
+# generated artifacts / runtime data (see CLAUDE.md "Runtime-only, NOT in git")
+usage.db
+dashboard.html
+azure_preview.html

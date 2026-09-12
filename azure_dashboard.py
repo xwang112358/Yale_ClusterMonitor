@@ -45,6 +45,11 @@ FAMILY_COLORS = {
     "gpt-3.5": "#0d9488",
     "o3-mini": "#ea580c", "o3": "#f97316",
     "o1-mini": "#facc15", "o1": "#eab308",
+    # Foundry-hosted Anthropic models. One hue, stepped dark->light by tier so
+    # they read as a group; rose-shifted to stay clear of the o-series oranges.
+    "claude-opus-4.8": "#802f35", "claude-opus-4.6": "#a8484a",
+    "claude-sonnet-5": "#cc6b64", "claude-sonnet-4": "#e29a90",
+    "claude-haiku-4": "#f2c4bb",
     "claude": "#d97757",
     "embed": "#16a34a",
     "other": "#64748b",
@@ -71,7 +76,55 @@ FAMILY_PATTERNS = [
 ]
 
 
-def model_family(meter):
+# Azure AI Foundry bills Anthropic models through a Marketplace SaaS resource
+# named '<model>-<parent>-<uid>', and every one of them shares a single generic
+# meter ("Claude in Microsoft Foundry ... claude-consumption-units"). The model
+# is therefore recoverable only from the resource id, never from the meter.
+SAAS_MODEL_RE = re.compile(
+    r"/providers/microsoft\.saas/resources/(?P<model>.+)-[0-9a-f]{15}-[0-9a-f]{32}$",
+    re.I)
+CLAUDE_METER_RE = re.compile(
+    r"^Claude in Microsoft Foundry\s*\(([^)]+)\).*?([a-z0-9\-]+units)\s*$", re.I)
+
+
+def saas_model_family(resource_id):
+    """'claude-opus-4.6' from a Foundry SaaS resource id, else None.
+
+    Foundry clips the model segment to 15 chars, so 'claude-haiku-4-' arrives
+    already truncated (and a bare 'claude-sonnet-4' may be a clipped 4.5). We
+    show what survived rather than guessing at the full version.
+    """
+    m = SAAS_MODEL_RE.search(resource_id or "")
+    if not m:
+        return None
+    token = m.group("model").lower().rstrip("-")
+    # Foundry writes the version with a dash: claude-opus-4-6 -> claude-opus-4.6.
+    parts = token.rsplit("-", 2)
+    if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+        token = parts[0] + "-" + parts[1] + "." + parts[2]
+    return token
+
+
+def short_meter(meter):
+    """Trim Foundry's very long Anthropic meter so tooltips stay readable."""
+    if not meter:
+        return "(no meter)"
+    m = CLAUDE_METER_RE.match(meter)
+    return f"Claude · {m.group(1)} · {m.group(2)}" if m else meter
+
+
+def family_color(fam):
+    if fam in FAMILY_COLORS:
+        return FAMILY_COLORS[fam]
+    # An unrecognised Claude model still belongs with the Claude block.
+    return FAMILY_COLORS["claude" if fam.startswith("claude") else "other"]
+
+
+def model_family(meter, resource_id=None):
+    # Resource id wins: the Claude meter is identical across models.
+    fam = saas_model_family(resource_id)
+    if fam:
+        return fam
     if not meter:
         return "other"
     for pat, name in FAMILY_PATTERNS:
@@ -101,8 +154,8 @@ def _base_layout(extra=None):
 def stacked_bar_figure(billed_rows):
     res_family_cost = defaultdict(lambda: defaultdict(float))
     res_family_meters = defaultdict(lambda: defaultdict(list))
-    for _date, resource_name, meter, cost in billed_rows:
-        fam = model_family(meter)
+    for _date, resource_name, meter, cost, resource_id in billed_rows:
+        fam = model_family(meter, resource_id)
         res_family_cost[resource_name][fam] += cost
         res_family_meters[resource_name][fam].append((meter, cost))
     if not res_family_cost:
@@ -113,7 +166,10 @@ def stacked_bar_figure(billed_rows):
     for r in res_family_cost:
         for f, v in res_family_cost[r].items():
             family_totals[f] += v
-    families_sorted = sorted(family_totals.keys(),
+    # Drop families with no spend this month: they add legend entries with no
+    # visible segment (resources with zero spend are shown by the open-circle
+    # marker below instead).
+    families_sorted = sorted((f for f, v in family_totals.items() if v > 0),
                              key=lambda f: family_totals[f], reverse=True)
 
     fig = go.Figure()
@@ -126,7 +182,7 @@ def stacked_bar_figure(billed_rows):
             meters_detail = sorted(res_family_meters[r].get(fam, []),
                                    key=lambda mc: mc[1], reverse=True)
             meter_lines = "<br>".join(
-                f"  · {m}  <b>${c:,.2f}</b>" for m, c in meters_detail
+                f"  · {short_meter(m)}  <b>${c:,.2f}</b>" for m, c in meters_detail
             ) or "  (no meters)"
             hovers.append(
                 f"<b style='font-size:13px;'>{r}</b><br>"
@@ -136,7 +192,7 @@ def stacked_bar_figure(billed_rows):
             )
         fig.add_trace(go.Bar(
             name=fam, y=resources_sorted, x=xs, orientation="h",
-            marker=dict(color=FAMILY_COLORS.get(fam, FAMILY_COLORS["other"]),
+            marker=dict(color=family_color(fam),
                         line=dict(color=BG, width=0.5)),
             hovertemplate="%{customdata}<extra></extra>",
             customdata=hovers,
@@ -238,8 +294,8 @@ def per_resource_daily_figure(billed_rows):
     by_res = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
     detail = defaultdict(lambda: defaultdict(list))
     all_days = set()
-    for usage_date, resource_name, meter, cost in billed_rows:
-        fam = model_family(meter)
+    for usage_date, resource_name, meter, cost, resource_id in billed_rows:
+        fam = model_family(meter, resource_id)
         by_res[resource_name][usage_date][fam] += cost
         detail[resource_name][(usage_date, fam)].append((meter, cost))
         all_days.add(usage_date)
@@ -271,7 +327,7 @@ def per_resource_daily_figure(billed_rows):
                 meters = sorted(detail[r].get((d, fam), []),
                                 key=lambda mc: mc[1], reverse=True)
                 meter_lines = "<br>".join(
-                    f"  · {m}  <b>${c:,.2f}</b>" for m, c in meters
+                    f"  · {short_meter(m)}  <b>${c:,.2f}</b>" for m, c in meters
                 ) or "  (no meters)"
                 hovers.append(
                     f"<b>{r}</b>  ·  {d}<br>"
@@ -281,7 +337,7 @@ def per_resource_daily_figure(billed_rows):
                 )
             fig.add_trace(go.Bar(
                 x=days_sorted, y=ys, name=fam,
-                marker=dict(color=FAMILY_COLORS.get(fam, FAMILY_COLORS["other"]),
+                marker=dict(color=family_color(fam),
                             line=dict(color=BG, width=0.3)),
                 visible=(r == resources_sorted[0]),
                 hovertemplate="%{customdata}<extra></extra>",
@@ -375,10 +431,11 @@ def build_month_payload(rows, budget, canonical=None):
     # split into two rows (e.g. belo2-yhf vs BELO2-YHF). `canonical` maps
     # lower-cased name -> created casing.
     if canonical:
-        rows = [(d, canonical.get(rn.lower(), rn), m, c) for (d, rn, m, c) in rows]
+        rows = [(d, canonical.get(rn.lower(), rn), m, c, rid)
+                for (d, rn, m, c, rid) in rows]
     daily_map = defaultdict(float)
     res_billed = defaultdict(float)
-    for usage_date, rn, _m, cost in rows:
+    for usage_date, rn, _m, cost, _rid in rows:
         daily_map[usage_date] += cost
         res_billed[rn] += cost
     daily = sorted(daily_map.items())
@@ -442,7 +499,7 @@ def build_context(db_path=None):
 
     billed_rows = conn.execute(
         """
-        SELECT usage_date, resource_name, meter, cost_usd
+        SELECT usage_date, resource_name, meter, cost_usd, resource_id
         FROM billed_costs
         ORDER BY usage_date
         """
