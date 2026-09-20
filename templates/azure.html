@@ -221,6 +221,8 @@
   </div>
   <div class="header-right">
     <span class="who">{{ display }}</span>
+    <a href="{{ url_for('account') }}" class="btn">Account</a>
+    {% if is_admin %}<a href="{{ url_for('admin') }}" class="btn">Admin</a>{% endif %}
     <a href="{{ url_for('logout') }}" class="btn">Sign out</a>
     {% if ctx.generated_at %}<span class="meta">snapshot: {{ ctx.generated_at }}</span>{% endif %}
   </div>

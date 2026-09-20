@@ -15,37 +15,42 @@ All commands assume the values from the live deployment:
 
 ## Dashboard users
 
-The Flask app re-reads `users.json` on every login — none of these need a
-service restart.
+User management lives in the dashboard: sign in as an admin and open
+**Admin** (top right). Nothing here needs the droplet.
 
-### Add a user
+### Add a user (invite link)
 
-```bash
-ssh root@159.223.173.141
-sudo -u monitor /home/monitor/ClusterMonitor/.venv/bin/python \
-    /home/monitor/ClusterMonitor/manage_users.py add <login> --display "Display Name"
-# prompts for password twice
-```
+On the Admin page, type the person's username (their Yale NetID) and a
+display name, click **Create invite link**, and send them the link that
+appears (it is shown once). They open it, set their own password, and are
+signed in. Links last 7 days and work once. You never see or type their
+password.
 
-### Reset a user's password
+### Reset a password
 
-```bash
-sudo -u monitor /home/monitor/ClusterMonitor/.venv/bin/python \
-    /home/monitor/ClusterMonitor/manage_users.py reset <login>
-```
+Same page: **New link** on the user's row issues a fresh invite. Their old
+password keeps working until they use the link.
+
+### Change your own password
+
+**Account** (top right) → change password.
 
 ### Remove a user
 
-```bash
-sudo -u monitor /home/monitor/ClusterMonitor/.venv/bin/python \
-    /home/monitor/ClusterMonitor/manage_users.py remove <login>
-```
+**Remove** on the user's row. They are signed out at their next request.
 
-### List users
+### Emergency / bootstrap (CLI on the droplet)
+
+The CLI still exists for a fresh droplet (creating the first admin) or a
+lost admin login:
 
 ```bash
 sudo -u monitor /home/monitor/ClusterMonitor/.venv/bin/python \
     /home/monitor/ClusterMonitor/manage_users.py list
+# ... invite <netid> --display "Name"   (prints a link; set PUBLIC_URL for a full URL)
+# ... admin <netid> [--off]             (grant / revoke admin)
+# ... rename <old> <new>
+# ... add / reset / remove              (the old password-by-hand commands)
 ```
 
 ### Force every user to re-login (rotate SECRET_KEY)

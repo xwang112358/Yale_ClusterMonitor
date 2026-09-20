@@ -1,0 +1,95 @@
+{% extends "_auth_base.html" %}
+{% set wide = True %}
+{% block title %}Admin &middot; Cluster Monitor{% endblock %}
+{% block body %}
+<div class="nav">
+  <a href="{{ url_for('index') }}">&larr; Dashboard</a>
+  <a href="{{ url_for('account') }}">Account</a>
+  <a href="{{ url_for('logout') }}">Sign out</a>
+</div>
+<h1>Users</h1>
+<div class="sub">{{ rows|length }} account{{ '' if rows|length == 1 else 's' }} &middot; invites last {{ ttl_days }} days and work once</div>
+
+{% for cat, msg in messages %}
+  {% if cat == 'error' %}<div class="err">{{ msg }}</div>{% endif %}
+  {% if cat == 'ok' %}<div class="ok">{{ msg }}</div>{% endif %}
+{% endfor %}
+
+{% if new_invite %}
+<div class="ok">
+  Invite link for <strong>{{ new_invite.user }}</strong>. Send it to them now &mdash; it is shown only once.
+  <div class="link-box">
+    <code id="invite-link">{{ new_invite.link }}</code>
+    <button type="button" class="quiet" onclick="copyLink(this)">Copy</button>
+  </div>
+</div>
+{% endif %}
+
+<h2>Invite someone</h2>
+<form method="POST" action="{{ url_for('admin_invite') }}" class="inline-form" autocomplete="off">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  <div>
+    <label for="username">Username (Yale NetID)</label>
+    <input id="username" type="text" name="username" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,31}" placeholder="abc123" required>
+  </div>
+  <div>
+    <label for="display">Display name</label>
+    <input id="display" type="text" name="display" maxlength="64" placeholder="Full Name">
+  </div>
+  <button type="submit">Create invite link</button>
+</form>
+<div class="hint" style="text-align:left;margin-top:8px;">For an existing user this issues a fresh link (their current password keeps working until they use it). Use it as the password reset.</div>
+
+<h2>Accounts</h2>
+<table class="users">
+  <thead><tr><th>Username</th><th>Display name</th><th>Status</th><th></th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td>{{ r.username }}{% if r.admin %}<span class="pill admin">admin</span>{% endif %}</td>
+      <td>{{ r.display }}</td>
+      <td>
+        {% if r.invite == 'pending' %}<span class="pill pending">invite pending</span>
+        {% elif r.invite == 'expired' %}<span class="pill expired">invite expired</span>
+        {% elif not r.has_password %}<span class="pill expired">no password</span>
+        {% else %}active{% endif %}
+      </td>
+      <td class="actions">
+        <form method="POST" action="{{ url_for('admin_invite') }}">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="username" value="{{ r.username }}">
+          <button type="submit" class="quiet" title="Issue a fresh invite / reset link">New link</button>
+        </form>
+        {% if r.username != user %}
+        <form method="POST" action="{{ url_for('admin_remove') }}" onsubmit="return confirm('Remove {{ r.username }}? They will be signed out at their next request.');">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="username" value="{{ r.username }}">
+          <button type="submit" class="quiet danger">Remove</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+{% block script %}
+<script>
+async function copyLink(btn) {
+  const text = document.getElementById('invite-link').textContent.trim();
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+    }
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  } catch (e) {
+    btn.textContent = 'Select & copy manually';
+  }
+}
+</script>
+{% endblock %}

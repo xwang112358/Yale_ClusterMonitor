@@ -461,6 +461,8 @@
   <div class="header-right">
     <span class="who">{{ display }}</span>
     <button class="btn" onclick="fetchData()" id="refresh-btn">Refresh</button>
+    <a href="/account" class="btn" style="display:inline-block;text-decoration:none;">Account</a>
+    {% if is_admin %}<a href="/admin" class="btn" style="display:inline-block;text-decoration:none;">Admin</a>{% endif %}
     <a href="/logout" class="btn" style="display:inline-block;text-decoration:none;">Sign out</a>
     <span id="status"><span class="dot"></span><span id="status-text">Loading&hellip;</span></span>
   </div>

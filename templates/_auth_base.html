@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}Cluster Monitor{% endblock %}</title>
+<link rel="icon" type="image/png" href="/static/img/favicon.png">
+<style>
+  :root {
+    --bg: #0f1117;
+    --card: #1a1d27;
+    --card-soft: #20232f;
+    --card-border: #2a2d3a;
+    --text: #e0e0e0;
+    --text-dim: #888;
+    --accent: #6c8cff;
+    --green: #4caf50;
+    --red: #f44336;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .box {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 10px;
+    padding: 28px 32px;
+    width: 100%;
+    max-width: 360px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+  }
+  .box.wide { max-width: 760px; }
+  h1 { font-size: 1.05rem; font-weight: 600; margin-bottom: 4px; letter-spacing: 0.5px; }
+  h2 { font-size: 0.8rem; font-weight: 600; margin: 22px 0 8px; letter-spacing: 0.5px; color: var(--text); }
+  .sub {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    margin-bottom: 20px;
+  }
+  label {
+    display: block;
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin: 12px 0 4px;
+  }
+  input[type=text], input[type=password] {
+    width: 100%;
+    background: #0f1117;
+    border: 1px solid var(--card-border);
+    border-radius: 5px;
+    padding: 8px 10px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.85rem;
+    transition: border-color 0.15s;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  button, .btn {
+    background: var(--accent);
+    color: #0f1117;
+    border: 0;
+    border-radius: 5px;
+    padding: 9px 14px;
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+  }
+  button.primary { width: 100%; margin-top: 20px; }
+  button:hover, .btn:hover { filter: brightness(1.08); text-decoration: none; }
+  button.quiet {
+    background: var(--card-soft);
+    color: var(--text);
+    border: 1px solid var(--card-border);
+    font-weight: 500;
+    font-size: 0.72rem;
+    padding: 4px 10px;
+  }
+  button.danger { background: rgba(244, 67, 54, 0.12); color: var(--red); border: 1px solid rgba(244, 67, 54, 0.4); }
+  .err, .ok {
+    padding: 8px 10px;
+    border-radius: 5px;
+    font-size: 0.78rem;
+    margin: 14px 0 4px;
+  }
+  .err { background: rgba(244, 67, 54, 0.12); border: 1px solid rgba(244, 67, 54, 0.4); color: var(--red); }
+  .ok  { background: rgba(76, 175, 80, 0.12);  border: 1px solid rgba(76, 175, 80, 0.4);  color: var(--green); }
+  .hint { font-size: 0.68rem; color: var(--text-dim); margin-top: 18px; text-align: center; line-height: 1.5; }
+  .nav { font-size: 0.72rem; color: var(--text-dim); margin-bottom: 18px; display: flex; gap: 14px; }
+  .kv { font-size: 0.78rem; line-height: 1.7; }
+  .kv b { color: var(--text-dim); font-weight: 500; display: inline-block; min-width: 7rem; }
+  table.users { width: 100%; border-collapse: collapse; font-size: 0.76rem; margin-top: 6px; }
+  table.users th, table.users td { padding: 7px 8px; text-align: left; border-bottom: 1px solid var(--card-border); vertical-align: middle; }
+  table.users th { color: var(--text-dim); font-weight: 500; font-size: 0.64rem; text-transform: uppercase; letter-spacing: 1px; }
+  table.users td.actions { text-align: right; white-space: nowrap; }
+  table.users td.actions form { display: inline; }
+  .pill { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.6px; margin-left: 6px; }
+  .pill.admin { background: rgba(108, 140, 255, 0.15); color: var(--accent); }
+  .pill.pending { background: rgba(255, 152, 0, 0.15); color: #ff9800; }
+  .pill.expired { background: rgba(244, 67, 54, 0.12); color: var(--red); }
+  .inline-form { display: grid; grid-template-columns: 1fr 1.4fr auto; gap: 10px; align-items: end; }
+  .inline-form label { margin-top: 0; }
+  .inline-form button { padding: 8px 14px; }
+  .link-box {
+    background: #0f1117;
+    border: 1px solid var(--card-border);
+    border-radius: 5px;
+    padding: 10px 12px;
+    margin-top: 10px;
+    font-size: 0.74rem;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  .link-box code { flex: 1; overflow-wrap: anywhere; color: var(--text); }
+  @media (max-width: 640px) { .inline-form { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="box{% if wide %} wide{% endif %}">
+{% block body %}{% endblock %}
+</div>
+{% block script %}{% endblock %}
+</body>
+</html>

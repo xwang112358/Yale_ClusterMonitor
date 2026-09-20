@@ -39,6 +39,13 @@ from a separate dir so the Azure secret stays out of the web app):
   `monitor-receive.sh bouchet` → `/var/lib/monitor/bouchet/snapshot.txt`. The KEY picks the
   file, never the pushed bytes. Re-copy it to `/usr/local/bin/` when it changes (it is not
   run from the repo).
+- **Auth** (`app.py` "Auth" section, templates `_auth_base.html` + `login/invite/account/admin.html`):
+  `users.json` holds `{password hash|null, display, admin?, invite?}`. Accounts are made from
+  `/admin` (admin-only, 404 to others) as one-time expiring **invite links** (`/invite/<token>`;
+  only the token's sha256 is stored, link shown once); re-issuing a link = password reset.
+  `/account` changes your own password. State-changing POSTs carry a session CSRF token.
+  `manage_users.py` is bootstrap/emergency only (`invite`, `admin`, `rename`, `add`, `reset`).
+  `PUBLIC_URL` in `.env` sets the link host; ProxyFix trusts Caddy's forwarded headers.
 - **Runtime-only, NOT in git** (`.gitignore`): `.env`, `usage.db`, `users.json`, `.flask_secret`, `.venv/`.
 
 ## Local dev on a fresh machine

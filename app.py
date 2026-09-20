@@ -7,6 +7,8 @@ data comes from a snapshot file that a pusher job on that cluster drops on
 this host over SSH (see misha-side/ and deploy/monitor-receive.sh).
 """
 
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -18,9 +20,10 @@ from datetime import timedelta
 from functools import wraps
 from pathlib import Path
 
-from flask import (Flask, abort, jsonify, redirect, render_template, request,
-                   session, url_for)
-from werkzeug.security import check_password_hash
+from flask import (Flask, abort, flash, get_flashed_messages, jsonify, redirect,
+                   render_template, request, session, url_for)
+from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.security import check_password_hash, generate_password_hash
 
 ROOT = Path(__file__).parent
 
@@ -108,22 +111,92 @@ def _load_secret():
 
 app.secret_key = _load_secret()
 app.permanent_session_lifetime = timedelta(days=14)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
+# Caddy terminates TLS one hop in front of gunicorn and forwards
+# X-Forwarded-Proto/For/Host, so request.host_url (used to build invite
+# links) says https and the public host instead of 127.0.0.1:5111.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 # ---------- Auth ----------
+# users.json: {username: {"password": <werkzeug hash or null>, "display": str,
+#                          "admin": true?, "invite": {"hash": sha256hex, "expires": epoch}?}}
+# Accounts are created from the admin page (/admin) as an INVITE: a one-time,
+# expiring link the person opens to set their own password. Only the sha256
+# of the token is stored; the token exists in the link alone and is shown to
+# the admin exactly once. Re-issuing a link for an existing user is the
+# password reset. manage_users.py is the bootstrap/emergency path.
+
+INVITE_TTL = int(os.environ.get("INVITE_TTL_SECONDS", str(7 * 24 * 3600)))
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")   # e.g. https://mishamonitor.duckdns.org
+MIN_PASSWORD_LEN = 10
+USERNAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,31}")
+
 
 def load_users():
     if not USERS_FILE.exists():
         return {}
     try:
-        return json.loads(USERS_FILE.read_text())
+        data = json.loads(USERS_FILE.read_text())
     except json.JSONDecodeError:
         return {}
+    return {k: v for k, v in data.items() if isinstance(v, dict)}   # drops _comment keys
+
+
+def save_users(users):
+    """Atomic replace, so a crash mid-write never leaves an empty users.json."""
+    tmp = USERS_FILE.with_name(USERS_FILE.name + ".tmp")
+    tmp.write_text(json.dumps(users, indent=2) + "\n")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, USERS_FILE)
+
+
+def current_user():
+    """The signed-in user's record, or None if not signed in / since removed."""
+    u = session.get("user")
+    return load_users().get(u) if u else None
+
+
+def is_admin():
+    rec = current_user()
+    return bool(rec and rec.get("admin"))
+
+
+def csrf_token():
+    if "csrf" not in session:
+        session["csrf"] = secrets.token_urlsafe(32)
+    return session["csrf"]
+
+
+def require_csrf():
+    sent = request.form.get("csrf", "")
+    if not sent or not hmac.compare_digest(sent, session.get("csrf", "")):
+        abort(400)
+
+
+@app.context_processor
+def inject_auth():
+    return {"csrf_token": csrf_token,
+            "is_admin": is_admin() if "user" in session else False}
+
+
+def _start_session(username, rec):
+    session.clear()
+    session.permanent = True
+    session["user"] = username
+    session["display"] = rec.get("display", username)
+    csrf_token()
 
 
 def login_required(view):
     @wraps(view)
     def wrapper(*a, **kw):
-        if "user" not in session:
+        # A removed user is signed out at their next request: the session
+        # cookie alone is not enough, the record must still exist.
+        if "user" not in session or current_user() is None:
+            session.clear()
             if request.path.startswith("/api/"):
                 return jsonify({"error": "auth required"}), 401
             return redirect(url_for("login", next=request.path))
@@ -131,22 +204,72 @@ def login_required(view):
     return wrapper
 
 
+def admin_required(view):
+    @wraps(view)
+    def wrapper(*a, **kw):
+        if "user" not in session or current_user() is None:
+            session.clear()
+            return redirect(url_for("login", next=request.path))
+        if not is_admin():
+            abort(404)      # non-admins get no hint that the page exists
+        return view(*a, **kw)
+    return wrapper
+
+
+def password_problem(p1, p2):
+    if len(p1) < MIN_PASSWORD_LEN:
+        return f"Password must be at least {MIN_PASSWORD_LEN} characters."
+    if p1 != p2:
+        return "Passwords do not match."
+    return None
+
+
+def _token_hash(token):
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def issue_invite(users, username, display=None):
+    """Create the user if new, attach a fresh invite, return the raw token."""
+    token = secrets.token_urlsafe(32)
+    rec = users.get(username)
+    if rec is None:
+        rec = users[username] = {"password": None, "display": display or username}
+    elif display:
+        rec["display"] = display
+    rec["invite"] = {"hash": _token_hash(token), "expires": int(time.time()) + INVITE_TTL}
+    return token
+
+
+def find_invite(token):
+    """(username, record) for a live invite token, else None."""
+    h = _token_hash(token)
+    now = time.time()
+    for username, rec in load_users().items():
+        inv = rec.get("invite")
+        if inv and hmac.compare_digest(inv.get("hash", ""), h):
+            return (username, rec) if inv.get("expires", 0) > now else None
+    return None
+
+
+def invite_link(token):
+    base = PUBLIC_URL or request.host_url.rstrip("/")
+    return f"{base}/invite/{token}"
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    if "user" in session:
+    if "user" in session and current_user() is not None:
         return redirect(url_for("index"))
     error = None
     if request.method == "POST":
         users = load_users()
-        u = request.form.get("username", "").strip()
+        u = request.form.get("username", "").strip().lower()
         p = request.form.get("password", "")
         rec = users.get(u)
-        if rec and check_password_hash(rec["password"], p):
-            session.permanent = True
-            session["user"] = u
-            session["display"] = rec.get("display", u)
+        if rec and rec.get("password") and check_password_hash(rec["password"], p):
+            _start_session(u, rec)
             nxt = request.args.get("next") or url_for("index")
-            if not nxt.startswith("/"):
+            if not nxt.startswith("/") or nxt.startswith("//"):
                 nxt = url_for("index")
             return redirect(nxt)
         error = "Invalid username or password."
@@ -158,6 +281,114 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+
+@app.route("/invite/<token>", methods=["GET", "POST"])
+def invite(token):
+    found = find_invite(token)
+    if not found:
+        return render_template("invite.html", invalid=True, ttl_days=INVITE_TTL // 86400), 404
+    username, rec = found
+    error = None
+    if request.method == "POST":
+        p1 = request.form.get("new_password", "")
+        p2 = request.form.get("confirm", "")
+        error = password_problem(p1, p2)
+        if not error:
+            users = load_users()
+            rec = users[username]
+            rec["password"] = generate_password_hash(p1)
+            rec.pop("invite", None)          # one use
+            save_users(users)
+            _start_session(username, rec)
+            return redirect(url_for("index"))
+    return render_template("invite.html", username=username, display=rec.get("display"),
+                           error=error, min_len=MIN_PASSWORD_LEN)
+
+
+@app.route("/account", methods=["GET", "POST"])
+@login_required
+def account():
+    error = message = None
+    if request.method == "POST":
+        require_csrf()
+        users = load_users()
+        rec = users[session["user"]]
+        current = request.form.get("current", "")
+        p1 = request.form.get("new_password", "")
+        p2 = request.form.get("confirm", "")
+        if not (rec.get("password") and check_password_hash(rec["password"], current)):
+            error = "Current password is incorrect."
+        else:
+            error = password_problem(p1, p2)
+            if not error and p1 == current:
+                error = "The new password must differ from the current one."
+        if not error:
+            rec["password"] = generate_password_hash(p1)
+            rec.pop("invite", None)
+            save_users(users)
+            message = "Password changed."
+    return render_template("account.html", user=session["user"],
+                           display=session.get("display", session["user"]),
+                           clusters=list(CLUSTERS.values()),
+                           error=error, message=message, min_len=MIN_PASSWORD_LEN)
+
+
+@app.route("/admin")
+@admin_required
+def admin():
+    now = time.time()
+    rows = []
+    for username, rec in sorted(load_users().items()):
+        inv = rec.get("invite")
+        status = None
+        if inv:
+            status = "pending" if inv.get("expires", 0) > now else "expired"
+        rows.append({
+            "username": username,
+            "display": rec.get("display", username),
+            "admin": bool(rec.get("admin")),
+            "has_password": bool(rec.get("password")),
+            "invite": status,
+        })
+    return render_template("admin.html", rows=rows, user=session["user"],
+                           ttl_days=INVITE_TTL // 86400,
+                           new_invite=session.pop("new_invite", None),
+                           messages=get_flashed_messages(with_categories=True))
+
+
+@app.route("/admin/invite", methods=["POST"])
+@admin_required
+def admin_invite():
+    require_csrf()
+    username = request.form.get("username", "").strip().lower()
+    display = request.form.get("display", "").strip()[:64]
+    if not USERNAME_RE.fullmatch(username):
+        flash("Username must be 1-32 characters of letters, digits, . _ - (a NetID like abc123).", "error")
+        return redirect(url_for("admin"))
+    users = load_users()
+    token = issue_invite(users, username, display or None)
+    save_users(users)
+    # Shown once, on the next GET, then forgotten: the link is never stored.
+    session["new_invite"] = {"user": username, "link": invite_link(token)}
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/remove", methods=["POST"])
+@admin_required
+def admin_remove():
+    require_csrf()
+    username = request.form.get("username", "").strip().lower()
+    users = load_users()
+    if username == session["user"]:
+        flash("You cannot remove your own account.", "error")
+    elif username not in users:
+        flash(f"No such user: {username}", "error")
+    else:
+        del users[username]
+        save_users(users)
+        flash(f"Removed {username}.", "ok")
+    return redirect(url_for("admin"))
 
 
 # ---------- SLURM polling ----------

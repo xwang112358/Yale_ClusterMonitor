@@ -1,0 +1,28 @@
+{% extends "_auth_base.html" %}
+{% block title %}Set your password &middot; Cluster Monitor{% endblock %}
+{% block body %}
+{% if invalid %}
+  <h1>Cluster Monitor</h1>
+  <div class="sub">Invite link</div>
+  <div class="err">This invite link is not valid. It may have been used already or expired (links last {{ ttl_days }} days).</div>
+  <div class="hint">Ask Allen for a fresh link.</div>
+{% else %}
+<form method="POST" autocomplete="off">
+  <h1>Welcome{% if display %}, {{ display }}{% endif %}</h1>
+  <div class="sub">Set the password for <strong>{{ username }}</strong></div>
+
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+
+  <input type="hidden" name="username" value="{{ username }}" autocomplete="username">
+  <label for="new_password">New password</label>
+  <input id="new_password" type="password" name="new_password" autocomplete="new-password" minlength="{{ min_len }}" autofocus required>
+
+  <label for="confirm">Confirm password</label>
+  <input id="confirm" type="password" name="confirm" autocomplete="new-password" minlength="{{ min_len }}" required>
+
+  <button type="submit" class="primary">Set password &amp; sign in</button>
+
+  <div class="hint">At least {{ min_len }} characters. This link works once.<br>You can change the password later from the Account page.</div>
+</form>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,37 @@
+{% extends "_auth_base.html" %}
+{% block title %}Account &middot; Cluster Monitor{% endblock %}
+{% block body %}
+<div class="nav">
+  <a href="{{ url_for('index') }}">&larr; Dashboard</a>
+  {% if is_admin %}<a href="{{ url_for('admin') }}">Admin</a>{% endif %}
+  <a href="{{ url_for('logout') }}">Sign out</a>
+</div>
+<h1>{{ display }}</h1>
+<div class="sub">Account</div>
+
+<div class="kv">
+  <div><b>Username</b> {{ user }}</div>
+  <div><b>Clusters</b> {% for c in clusters %}{{ c.label }}{% if not loop.last %}, {% endif %}{% endfor %}</div>
+  <div><b>Lab account</b> {% for c in clusters %}{{ c.label }}: {{ c.lab_account or '—' }}{% if not loop.last %} &middot; {% endif %}{% endfor %}</div>
+</div>
+
+<h2>Change password</h2>
+<form method="POST">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  {% if message %}<div class="ok">{{ message }}</div>{% endif %}
+
+  <input type="hidden" name="username" value="{{ user }}" autocomplete="username">
+  <label for="current">Current password</label>
+  <input id="current" type="password" name="current" autocomplete="current-password" required>
+
+  <label for="new_password">New password</label>
+  <input id="new_password" type="password" name="new_password" autocomplete="new-password" minlength="{{ min_len }}" required>
+
+  <label for="confirm">Confirm new password</label>
+  <input id="confirm" type="password" name="confirm" autocomplete="new-password" minlength="{{ min_len }}" required>
+
+  <button type="submit" class="primary">Change password</button>
+  <div class="hint">At least {{ min_len }} characters. Other signed-in devices stay signed in.</div>
+</form>
+{% endblock %}
