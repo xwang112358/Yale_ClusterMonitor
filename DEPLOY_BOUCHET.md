@@ -149,8 +149,7 @@ the same as on Misha.) Do D3 on the droplet now, before B4.
 cd ~/project/cluster_monitor
 sed -i 's#DROPLET_HOST:-203\.0\.113\.10#DROPLET_HOST:-159.223.173.141#' pusher.sbatch
 sed -i 's#PARTITIONS:-gpu,gpu_devel}#PARTITIONS:-gpu,gpu_devel,gpu_h100,gpu_h200,gpu_b200,gpu_rtx6000}#' pusher.sbatch
-sed -i 's/^#SBATCH --requeue$/#SBATCH --requeue
-#SBATCH --account=pi_qc88/' pusher.sbatch
+sed -i 's/^#SBATCH --requeue$/#SBATCH --requeue\n#SBATCH --account=pi_qc88/' pusher.sbatch
 bash -n pusher.sbatch && grep -n 'account=\|DROPLET_HOST=\|PARTITIONS=' pusher.sbatch
 ```
 
