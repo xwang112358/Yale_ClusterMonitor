@@ -27,7 +27,7 @@ Do Phase D (droplet) first — it takes a minute and makes `/bouchet` exist
 |---|---|
 | Droplet | `root@159.223.173.141` → `https://mishamonitor.duckdns.org` |
 | Bouchet login | `xw532@bouchet.ycrc.yale.edu` (Duo on every connection — do everything in one session) |
-| SLURM account | `q_chen` (check on Bouchet: `sacctmgr show user $USER format=Account -P`) |
+| SLURM account | **`pi_qc88`** — the Chen lab is named differently on Bouchet (Misha: `q_chen`), and your *default* there is the old lab (`pi_mr2749`). List yours with `sacctmgr show assoc user=$USER format=Account -P`; put the right one in `pusher.sbatch` (B3) and `BOUCHET_LAB_ACCOUNT` (D2) |
 | Partitions to monitor | `gpu,gpu_devel,gpu_h100,gpu_h200,gpu_b200,gpu_rtx6000` — **verify in B1**; the pusher's `sinfo -p` fails on a name that does not exist |
 | Pusher partition | `day` (1-day cap on Bouchet, same as Misha, so `pusher.sbatch` runs unchanged) |
 | Bouchet-side install path | `~/project/cluster_monitor` (same convention as Misha) |
@@ -74,6 +74,7 @@ CLUSTERS=misha,bouchet
 BOUCHET_HOST=bouchet.ycrc.yale.edu
 BOUCHET_PARTITIONS=gpu,gpu_devel,gpu_h100,gpu_h200,gpu_b200,gpu_rtx6000
 BOUCHET_SNAPSHOT_FILE=/var/lib/monitor/bouchet/snapshot.txt
+BOUCHET_LAB_ACCOUNT=pi_qc88
 EOF
 systemctl restart misha-monitor
 systemctl is-active misha-monitor
@@ -148,15 +149,25 @@ the same as on Misha.) Do D3 on the droplet now, before B4.
 cd ~/project/cluster_monitor
 sed -i 's#DROPLET_HOST:-203\.0\.113\.10#DROPLET_HOST:-159.223.173.141#' pusher.sbatch
 sed -i 's#PARTITIONS:-gpu,gpu_devel}#PARTITIONS:-gpu,gpu_devel,gpu_h100,gpu_h200,gpu_b200,gpu_rtx6000}#' pusher.sbatch
-grep -n 'DROPLET_HOST\|PARTITIONS=' pusher.sbatch
+sed -i 's/^#SBATCH --requeue$/#SBATCH --requeue
+#SBATCH --account=pi_qc88/' pusher.sbatch
+bash -n pusher.sbatch && grep -n 'account=\|DROPLET_HOST=\|PARTITIONS=' pusher.sbatch
 ```
 
 Expected:
 
 ```
+#SBATCH --account=pi_qc88
 DROPLET_HOST="${DROPLET_HOST:-159.223.173.141}"
 PARTITIONS="${PARTITIONS:-gpu,gpu_devel,gpu_h100,gpu_h200,gpu_b200,gpu_rtx6000}"
 ```
+
+The account goes in the file, not on the `sbatch` command line, because the job
+resubmits itself daily from the file. Without it the job bills your *default*
+account. **Get the file onto the cluster with `git clone` or `curl`, never by
+pasting into an editor**: a paste that inserts blank lines breaks the `\`
+line continuations, `ssh` then runs with no arguments and every push fails with
+`-o: command not found` in the job log.
 
 ### B4 — One-shot manual push
 
