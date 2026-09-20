@@ -1,5 +1,10 @@
 # Misha-side setup (the pusher)
 
+> Nothing here is Misha-specific. The same `pusher.sbatch` runs unchanged on
+> Bouchet (or any other SLURM cluster with a `day`-style partition); only the
+> `PARTITIONS` list and the droplet-side `authorized_keys` line differ. The
+> Bouchet walkthrough is `DEPLOY_BOUCHET.md` at the repo root.
+
 These steps run on **Misha** (you'll need to be on Yale VPN once to do
 the initial setup; after that the pusher runs autonomously and you
 never need VPN again to use the dashboard).

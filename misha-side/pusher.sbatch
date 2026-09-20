@@ -7,9 +7,13 @@
 #SBATCH --output=monitor_pusher.%j.log
 #SBATCH --requeue
 #
-# Polls sinfo/squeue on Misha and pushes the raw output to a DigitalOcean
-# droplet over outbound SSH every $INTERVAL seconds. The droplet's Flask
-# app reads the dropped file and renders the dashboard.
+# Polls sinfo/squeue on the cluster it runs on (Misha, Bouchet, ...) and
+# pushes the raw output to a DigitalOcean droplet over outbound SSH every
+# $INTERVAL seconds. The droplet's Flask app reads the dropped file and
+# renders the dashboard. Nothing in here is Misha-specific: the droplet
+# decides which cluster's file a push lands in from the SSH key it arrives
+# with (deploy/monitor-receive.sh), so the same script runs unchanged on a
+# second cluster with its own key and PARTITIONS list (see DEPLOY_BOUCHET.md).
 #
 # Self-perpetuating: just before walltime expires, this script submits
 # its own successor via --dependency=afterany so the chain never stops.
@@ -32,6 +36,8 @@ DROPLET_HOST="${DROPLET_HOST:-203.0.113.10}"     # ← put your droplet IP here
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_monitor}"
 PARTITIONS="${PARTITIONS:-gpu,gpu_devel}"
 INTERVAL="${INTERVAL:-60}"                       # seconds between polls
+CLUSTER="${CLUSTER:-$(hostname -d 2>/dev/null | cut -d. -f1)}"   # label only (META header)
+CLUSTER="${CLUSTER:-unknown}"
 EXIT_BEFORE_SECS=$((23 * 3600 + 30 * 60))        # 23h 30m — exit before 23:55 walltime
 # -----------------------------------------
 
@@ -49,7 +55,7 @@ on_exit() {
 trap on_exit EXIT
 
 echo "[$(date -Is)] pusher started — job ${SLURM_JOB_ID} on $(hostname)"
-echo "[$(date -Is)] config: droplet=${DROPLET_USER}@${DROPLET_HOST} partitions=${PARTITIONS} interval=${INTERVAL}s"
+echo "[$(date -Is)] config: cluster=${CLUSTER} droplet=${DROPLET_USER}@${DROPLET_HOST} partitions=${PARTITIONS} interval=${INTERVAL}s"
 
 SINFO_FMT='Partition:25,NodeHost:30,CPUsState:20,AllocMem:14,Memory:14,Gres:50,GresUsed:80,StateLong:18'
 SQUEUE_R_FMT='NodeList:60,JobID:15,UserName:15,Account:25,TimeUsed:15,TimeLimit:15,TimeLeft:15,EndTime:22,tres-alloc:120,Name:60'
@@ -64,6 +70,7 @@ while [ "$SECONDS" -lt "$EXIT_BEFORE_SECS" ]; do
         echo "generated_at $(date +%s)"
         echo "node $(hostname)"
         echo "job_id ${SLURM_JOB_ID}"
+        echo "cluster ${CLUSTER}"
         echo "===SINFO==="
         sinfo -h -p "$PARTITIONS" -N -O "$SINFO_FMT" 2>&1
         echo "===SQUEUE_R==="

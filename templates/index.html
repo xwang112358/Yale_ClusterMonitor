@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Misha Monitor</title>
+<title>{{ cluster.label }} Monitor</title>
 <link rel="icon" type="image/png" href="/static/img/favicon.png">
 <style>
   :root {
@@ -108,6 +108,13 @@
     text-decoration: none;
   }
   a.btn-nav .arrow { font-size: 1.1rem; line-height: 1; }
+  .cluster-nav { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  a.btn-nav.active {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+    cursor: default;
+  }
 
   .section-title {
     font-size: 0.72rem;
@@ -230,18 +237,26 @@
   .node-row.mid     { background: var(--green-soft); color: #fff; }
   .node-row.high    { background: var(--green-deep); color: #fff; }
   .node-row.full    { background: #1b5e20; color: #fff; }
-  .node-row.gpu-label { background: #2e7d32; color: #fff; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; font-size: 0.66rem; }
+  .node-row.gpu-label { background: #57534e; color: #fff; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; font-size: 0.66rem; }  /* stone: unknown type (never a status green) */
   .node-row.gpu-label.gpu-h100 { background: #2563eb; }   /* blue */
   .node-row.gpu-label.gpu-h200 { background: #7c3aed; }   /* purple */
+  .node-row.gpu-label.gpu-b200 { background: #ca8a04; }   /* gold (Bouchet) */
   .node-row.gpu-label.gpu-l40s { background: #0d9488; }   /* teal */
   .node-row.gpu-label.gpu-a40  { background: #ea580c; }   /* orange */
   .node-row.gpu-label.gpu-a100 { background: #db2777; }   /* rose (was green — clashed with status greens) */
+  .node-row.gpu-label.gpu-a5000 { background: #92400e; }  /* brown (Bouchet) */
+  .node-row.gpu-label.gpu-rtx_5000_ada { background: #0284c7; }            /* sky (Bouchet) */
+  .node-row.gpu-label.gpu-rtx_pro_6000_blackwell { background: #c026d3; }  /* fuchsia (Bouchet) */
   .node-row.gpu-label.gpu-cpu  { background: #475569; }   /* slate (no GPU) */
   .node-card.has-h100 { box-shadow: inset 4px 0 0 #2563eb; }
   .node-card.has-h200 { box-shadow: inset 4px 0 0 #7c3aed; }
+  .node-card.has-b200 { box-shadow: inset 4px 0 0 #ca8a04; }
   .node-card.has-l40s { box-shadow: inset 4px 0 0 #0d9488; }
   .node-card.has-a40  { box-shadow: inset 4px 0 0 #ea580c; }
   .node-card.has-a100 { box-shadow: inset 4px 0 0 #db2777; }
+  .node-card.has-a5000 { box-shadow: inset 4px 0 0 #92400e; }
+  .node-card.has-rtx_5000_ada { box-shadow: inset 4px 0 0 #0284c7; }
+  .node-card.has-rtx_pro_6000_blackwell { box-shadow: inset 4px 0 0 #c026d3; }
   .node-row.unhealthy { background: #5e2a2a; color: #fff; }
   .partition-block { margin-bottom: 18px; }
   .partition-head {
@@ -272,11 +287,16 @@
     letter-spacing: 1.4px;
   }
   .gtype-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .gtype-swatch { background: #57534e; }
   .gtype-swatch.h100 { background: #2563eb; }
   .gtype-swatch.h200 { background: #7c3aed; }
+  .gtype-swatch.b200 { background: #ca8a04; }
   .gtype-swatch.l40s { background: #0d9488; }
   .gtype-swatch.a40  { background: #ea580c; }
   .gtype-swatch.a100 { background: #db2777; }
+  .gtype-swatch.a5000 { background: #92400e; }
+  .gtype-swatch.rtx_5000_ada { background: #0284c7; }
+  .gtype-swatch.rtx_pro_6000_blackwell { background: #c026d3; }
   .gtype-swatch.cpu  { background: #475569; }
   .gtype-head .ghdr-meta { color: var(--text-dim); font-size: 0.65rem; letter-spacing: 0.6px; margin-left: auto; }
   .partition-pill {
@@ -430,8 +450,13 @@
 
 <header>
   <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
-    <a href="/azure" class="btn-nav">Azure Usage <span class="arrow">&rarr;</span></a>
-    <h1>Misha Monitor<span class="host">{{ misha_host }} &middot; {{ partitions }}</span></h1>
+    <nav class="cluster-nav">
+      {% if clusters|length > 1 %}{% for c in clusters %}
+      <a href="{{ c.url }}" class="btn-nav{% if c.slug == cluster.slug %} active{% endif %}">{{ c.label }}</a>
+      {% endfor %}{% endif %}
+      <a href="/azure" class="btn-nav">Azure Usage <span class="arrow">&rarr;</span></a>
+    </nav>
+    <h1>{{ cluster.label }} Monitor<span class="host">{{ cluster.host }} &middot; {{ partitions }}</span></h1>
   </div>
   <div class="header-right">
     <span class="who">{{ display }}</span>
@@ -487,6 +512,7 @@
 const REFRESH_MS = 30000;
 const ME = {{ user|tojson }};
 const LAB_NETIDS_INIT = {{ ((lab_account and []) or [])|tojson }};
+const API_URL = {{ cluster.api_url|tojson }};
 const _PARTITIONS_RAW = {{ partitions|tojson }};
 const PARTITIONS = Array.isArray(_PARTITIONS_RAW)
   ? _PARTITIONS_RAW
@@ -494,6 +520,7 @@ const PARTITIONS = Array.isArray(_PARTITIONS_RAW)
 const PARTITIONS_STR = PARTITIONS.join(",");
 let LAB_NETIDS = [];
 let LAST = null;
+let TYPE_PARTS = {};   // gpu type -> Set of partitions whose monitored nodes carry it
 
 document.getElementById('refresh-secs').textContent = (REFRESH_MS/1000).toFixed(0);
 
@@ -568,10 +595,11 @@ function renderGpuSummary(summary) {
     const soonest = (free === 0 && s.soonest_free_at)
       ? `<div class="gsub" style="color:var(--accent);">next free in ${fmtRelative(s.soonest_free_at) || '?'}</div>`
       : '';
-    // Only the high-end cards (A100/H100/H200) get the salloc helper —
-    // they're the cards people scramble for. L40S/A40 are abundant enough
-    // that users typically just `salloc` by hand.
-    const grabbable = ["h100", "h200", "a100"].includes((s.type || "").toLowerCase());
+    // Only the high-end cards get the salloc helper — they're the cards
+    // people scramble for. L40S/A40 are abundant enough that users
+    // typically just `salloc` by hand.
+    const grabbable = ["h100", "h200", "b200", "a100", "rtx_pro_6000_blackwell"]
+      .includes((s.type || "").toLowerCase());
     const grab = grabbable ? `
       <div class="grab">
         <div class="grab-row">
@@ -610,12 +638,22 @@ function renderGpuSummary(summary) {
     `${totalAll - totalAlloc} GPUs free / ${totalAll} total`;
 }
 
-// gpu_devel is A40-only on Misha (≤6h, ≤4 cpu, ≤32G mem, ≤1 GPU).
-// For A40 we list both partitions so SLURM grabs whichever frees first;
-// other GPU types only exist in `gpu`.
+// Partition(s) to request for a GPU type: the monitored partitions whose
+// nodes carry that card, in the configured order, minus devel/scavenge
+// queues (short caps, tiny limits). Misha keeps every card in `gpu`;
+// Bouchet has gpu_h100 / gpu_h200 / gpu_b200 / gpu_rtx6000 next to `gpu`.
+// gpu_devel is A40-only on Misha (≤6h, ≤4 cpu, ≤32G mem, ≤1 GPU): for A40
+// we add it so SLURM grabs whichever frees first.
 function partitionFor(gtype) {
   const t = (gtype || "").toLowerCase();
-  if (t === "a40" && PARTITIONS.includes("gpu_devel")) return "gpu,gpu_devel";
+  const seen = TYPE_PARTS[t] || new Set();
+  const parts = PARTITIONS.filter(p => seen.has(p));
+  const main = parts.filter(p => !/devel|scavenge/.test(p));
+  if (main.length) {
+    if (t === "a40" && parts.includes("gpu_devel")) return [...main, "gpu_devel"].join(",");
+    return main.join(",");
+  }
+  if (parts.length) return parts.join(",");
   return PARTITIONS.includes("gpu") ? "gpu" : PARTITIONS_STR;
 }
 
@@ -700,7 +738,10 @@ function nodeCardHtml(n, i) {
   </div>`;
 }
 
-const PART_ORDER = {gpu: 0, gpu_devel: 1, bigmem: 2, day: 3, devel: 4, week: 5};
+// Display order of partition blocks: general GPU queue first, then the
+// per-card queues Bouchet uses, then devel/scavenge, then CPU partitions.
+const PART_ORDER = {gpu: 0, gpu_h100: 1, gpu_h200: 2, gpu_b200: 3, gpu_rtx6000: 4,
+                    gpu_devel: 5, scavenge_gpu: 6, bigmem: 7, day: 8, devel: 9, week: 10};
 
 function renderNodes(nodes) {
   const wrap = document.getElementById('node-grid');
@@ -913,11 +954,18 @@ async function fetchData() {
   const btn = document.getElementById('refresh-btn');
   btn.classList.add('spinning');
   try {
-    const r = await fetch('/api/cluster', {credentials: 'same-origin'});
+    const r = await fetch(API_URL, {credentials: 'same-origin'});
     if (r.status === 401) { window.location = '/login'; return; }
     const data = await r.json();
     LAST = data;
     LAST.nodes_sorted = [...(data.nodes || [])].sort((a,b) => a.host.localeCompare(b.host));
+    TYPE_PARTS = {};
+    for (const n of (data.nodes || [])) {
+      if (!n.gpu_type) continue;
+      const t = n.gpu_type.toLowerCase();
+      const set = (TYPE_PARTS[t] = TYPE_PARTS[t] || new Set());
+      for (const p of (n.partitions || [])) set.add(p);
+    }
     LAB_NETIDS = data.lab_netids || [];
     if (data.error && !data.nodes?.length) {
       setStatus('error', 'fetch failed');

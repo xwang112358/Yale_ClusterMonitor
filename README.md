@@ -1,7 +1,8 @@
 # Misha Monitor
 
-A small Flask dashboard that polls Yale's Misha cluster over SSH and
-shows partition / node / GPU availability with a per-user login.
+A small Flask dashboard that shows partition / node / GPU availability
+for Yale's Misha and Bouchet clusters with a per-user login (Misha at
+`/`, Bouchet at `/bouchet`; each cluster pushes its own snapshot).
 
 Adapted from Carlos Gonzalez's Vanderbilt `compute_monitor`. The
 original Vanderbilt-specific code is preserved in [archive/](archive/).
@@ -93,6 +94,10 @@ archive/                     Original Vanderbilt code (kept for reference)
 
 See [DEPLOY.md](DEPLOY.md). It's a worksheet — fill in your droplet
 IP, Yale host, netid, etc., and it walks through every step.
+
+To add a second cluster (Bouchet) to an existing deployment, follow
+[DEPLOY_BOUCHET.md](DEPLOY_BOUCHET.md): one more snapshot file, one more
+pusher job, one more SSH key locked to `monitor-receive.sh <cluster>`.
 
 ## Local development
 

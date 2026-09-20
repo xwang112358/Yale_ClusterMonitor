@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Sign in &middot; Misha Monitor</title>
+<title>Sign in &middot; Cluster Monitor</title>
 <link rel="icon" type="image/png" href="/static/img/favicon.png">
 <style>
   :root {
@@ -107,8 +107,8 @@
 </head>
 <body>
 <form class="login-box" method="POST">
-  <h1>Misha Monitor</h1>
-  <div class="sub">Lab access &mdash; sign in</div>
+  <h1>Cluster Monitor</h1>
+  <div class="sub">{{ (cluster_labels or ['Misha'])|join(' · ') }} · Azure &mdash; sign in</div>
 
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
 

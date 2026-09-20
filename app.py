@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Misha cluster monitor - Flask dashboard with per-user login.
+"""Yale cluster monitor - Flask dashboard with per-user login.
 
-Polls a Misha login node over SSH every CACHE_TTL seconds and renders a
-node-card view of the GPU partitions plus a queue panel for the lab account.
+Renders a node-card view of the GPU partitions plus a queue panel for the
+lab account, for one or more clusters (Misha, Bouchet, ...). Each cluster's
+data comes from a snapshot file that a pusher job on that cluster drops on
+this host over SSH (see misha-side/ and deploy/monitor-receive.sh).
 """
 
 import json
@@ -16,30 +18,75 @@ from datetime import timedelta
 from functools import wraps
 from pathlib import Path
 
-from flask import (Flask, jsonify, redirect, render_template, request,
+from flask import (Flask, abort, jsonify, redirect, render_template, request,
                    session, url_for)
 from werkzeug.security import check_password_hash
 
 ROOT = Path(__file__).parent
 
 # ---------- Configuration (env-driven) ----------
-# DATA_SOURCE picks where the cluster snapshot comes from:
-#   "file" (default): read snapshot dropped by the Misha-side pusher (recommended).
-#   "ssh":            this Flask host SSHes into Misha directly (legacy / Yale-network host).
+# DATA_SOURCE picks where each cluster's snapshot comes from:
+#   "file" (default): read the snapshot dropped by that cluster's pusher (recommended).
+#   "ssh":            this Flask host SSHes into the cluster directly (legacy / Yale-network host).
 DATA_SOURCE = os.environ.get("DATA_SOURCE", "file").lower()
-SNAPSHOT_FILE = Path(os.environ.get("SNAPSHOT_FILE", "/var/lib/monitor/snapshot.txt"))
 SNAPSHOT_MAX_AGE = int(os.environ.get("SNAPSHOT_MAX_AGE", "300"))  # seconds
-
-# Used only when DATA_SOURCE=ssh
-MISHA_HOST = os.environ.get("MISHA_HOST", "misha.ycrc.yale.edu")
-MISHA_USER = os.environ.get("MISHA_USER", "")
-MISHA_PARTITIONS = os.environ.get("MISHA_PARTITIONS", "gpu,gpu_devel")
 
 LAB_ACCOUNT = os.environ.get("LAB_ACCOUNT", "")
 LAB_NETIDS = [s.strip() for s in os.environ.get("LAB_NETIDS", "").split(",") if s.strip()]
 CACHE_TTL = int(os.environ.get("CACHE_TTL", "60"))
 USERS_FILE = Path(os.environ.get("USERS_FILE", ROOT / "users.json"))
 SECRET_FILE = ROOT / ".flask_secret"
+
+# ---------- Clusters ----------
+# CLUSTERS is the ordered list of cluster slugs to serve; the first one is the
+# default that `/` and `/api/cluster` render. Every other cluster lives at
+# `/<slug>` and `/api/cluster/<slug>`. Each cluster reads its settings from
+# <SLUG>_HOST, <SLUG>_USER, <SLUG>_PARTITIONS, <SLUG>_SNAPSHOT_FILE,
+# <SLUG>_LAB_ACCOUNT and <SLUG>_LABEL. Misha additionally honours the original
+# single-cluster names (MISHA_HOST, SNAPSHOT_FILE, LAB_ACCOUNT, ...) so an
+# existing .env keeps working unchanged.
+CLUSTER_SLUGS = [s.strip().lower() for s in os.environ.get("CLUSTERS", "misha").split(",")
+                 if s.strip()]
+if not CLUSTER_SLUGS:
+    CLUSTER_SLUGS = ["misha"]
+if any(not re.fullmatch(r"[a-z0-9_-]+", s) for s in CLUSTER_SLUGS):
+    raise SystemExit(f"CLUSTERS contains an invalid slug: {CLUSTER_SLUGS}")
+
+_LEGACY_MISHA_VARS = {  # <SLUG>_<KEY> falls back to these for misha only
+    "HOST": "MISHA_HOST",
+    "USER": "MISHA_USER",
+    "PARTITIONS": "MISHA_PARTITIONS",
+    "SNAPSHOT_FILE": "SNAPSHOT_FILE",
+}
+
+
+def _cluster_config(slug):
+    prefix = slug.upper().replace("-", "_")
+
+    def env(key, default=""):
+        v = os.environ.get(f"{prefix}_{key}")
+        if v is None and slug == "misha" and key in _LEGACY_MISHA_VARS:
+            v = os.environ.get(_LEGACY_MISHA_VARS[key])
+        return default if v is None else v
+
+    default_snapshot = ("/var/lib/monitor/snapshot.txt" if slug == "misha"
+                        else f"/var/lib/monitor/{slug}/snapshot.txt")
+    return {
+        "slug": slug,
+        "label": env("LABEL", slug.capitalize()),
+        "host": env("HOST", f"{slug}.ycrc.yale.edu"),
+        "user": env("USER", ""),                       # only when DATA_SOURCE=ssh
+        "partitions": env("PARTITIONS", "gpu,gpu_devel"),
+        "snapshot": Path(env("SNAPSHOT_FILE", default_snapshot)),
+        # Per-cluster lab account; falls back to the global one (same lab, two clusters).
+        "lab_account": env("LAB_ACCOUNT", LAB_ACCOUNT),
+        "url": "/" if slug == CLUSTER_SLUGS[0] else f"/{slug}",
+        "api_url": "/api/cluster" if slug == CLUSTER_SLUGS[0] else f"/api/cluster/{slug}",
+    }
+
+
+CLUSTERS = {slug: _cluster_config(slug) for slug in CLUSTER_SLUGS}
+DEFAULT_CLUSTER = CLUSTER_SLUGS[0]
 
 app = Flask(__name__)
 
@@ -103,7 +150,8 @@ def login():
                 nxt = url_for("index")
             return redirect(nxt)
         error = "Invalid username or password."
-    return render_template("login.html", error=error)
+    return render_template("login.html", error=error,
+                           cluster_labels=[c["label"] for c in CLUSTERS.values()])
 
 
 @app.route("/logout")
@@ -128,8 +176,8 @@ TRES_CPU_RE = re.compile(r"\bcpu=(\d+)")
 TRES_MEM_RE = re.compile(r"\bmem=([\d.]+)([KMGT])")
 
 
-def ssh_run(remote_cmd, timeout=20):
-    target = f"{MISHA_USER}@{MISHA_HOST}" if MISHA_USER else MISHA_HOST
+def ssh_run(cluster, remote_cmd, timeout=20):
+    target = f"{cluster['user']}@{cluster['host']}" if cluster["user"] else cluster["host"]
     result = subprocess.run(
         ["ssh", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
          "-o", "StrictHostKeyChecking=accept-new", target, remote_cmd],
@@ -297,26 +345,28 @@ def parse_squeue_pending(raw):
     return out
 
 
-def fetch_via_ssh():
-    sinfo_cmd = f"sinfo -h -p {MISHA_PARTITIONS} -N -O '{SINFO_FMT}'"
-    squeue_r_cmd = f"squeue -h -p {MISHA_PARTITIONS} -t R -O '{SQUEUE_FMT_R}'"
-    squeue_pd_cmd = f"squeue -h -p {MISHA_PARTITIONS} -t PD -O '{SQUEUE_FMT_PD}'"
+def fetch_via_ssh(cluster):
+    parts = cluster["partitions"]
+    sinfo_cmd = f"sinfo -h -p {parts} -N -O '{SINFO_FMT}'"
+    squeue_r_cmd = f"squeue -h -p {parts} -t R -O '{SQUEUE_FMT_R}'"
+    squeue_pd_cmd = f"squeue -h -p {parts} -t PD -O '{SQUEUE_FMT_PD}'"
     with ThreadPoolExecutor(max_workers=3) as pool:
-        f_sinfo = pool.submit(ssh_run, sinfo_cmd)
-        f_squeue_r = pool.submit(ssh_run, squeue_r_cmd)
-        f_squeue_pd = pool.submit(ssh_run, squeue_pd_cmd)
+        f_sinfo = pool.submit(ssh_run, cluster, sinfo_cmd)
+        f_squeue_r = pool.submit(ssh_run, cluster, squeue_r_cmd)
+        f_squeue_pd = pool.submit(ssh_run, cluster, squeue_pd_cmd)
         return f_sinfo.result(), f_squeue_r.result(), f_squeue_pd.result(), None
 
 
-def fetch_via_file():
-    """Read the snapshot dropped by the Misha-side pusher and split into
+def fetch_via_file(cluster):
+    """Read the snapshot dropped by the cluster's pusher and split into
     its three sections. Raises if the file is missing or stale."""
-    if not SNAPSHOT_FILE.exists():
-        raise RuntimeError(f"snapshot file missing at {SNAPSHOT_FILE} — pusher running?")
-    age = time.time() - SNAPSHOT_FILE.stat().st_mtime
+    snapshot = cluster["snapshot"]
+    if not snapshot.exists():
+        raise RuntimeError(f"snapshot file missing at {snapshot} — pusher running?")
+    age = time.time() - snapshot.stat().st_mtime
     if age > SNAPSHOT_MAX_AGE:
         raise RuntimeError(f"snapshot is {int(age)}s old (limit {SNAPSHOT_MAX_AGE}s) — pusher down?")
-    raw = SNAPSHOT_FILE.read_text(errors="replace")
+    raw = snapshot.read_text(errors="replace")
 
     sections, current, buf = {}, None, []
     for line in raw.splitlines():
@@ -344,11 +394,12 @@ def fetch_via_file():
     )
 
 
-def fetch_cluster():
+def fetch_cluster(cluster):
     if DATA_SOURCE == "file":
-        sinfo_raw, squeue_r_raw, squeue_pd_raw, pusher_ts = fetch_via_file()
+        sinfo_raw, squeue_r_raw, squeue_pd_raw, pusher_ts = fetch_via_file(cluster)
     else:
-        sinfo_raw, squeue_r_raw, squeue_pd_raw, pusher_ts = fetch_via_ssh()
+        sinfo_raw, squeue_r_raw, squeue_pd_raw, pusher_ts = fetch_via_ssh(cluster)
+    lab_account = cluster["lab_account"]
 
     nodes = parse_sinfo(sinfo_raw)
     by_node, running = parse_squeue_running(squeue_r_raw)
@@ -384,8 +435,8 @@ def fetch_cluster():
                 d["soonest_free_at"] = n["next_gpu_free_at"]
     gpu_summary_list = sorted(gpu_summary.values(), key=lambda d: d["type"])
 
-    lab_running = [j for j in running if LAB_ACCOUNT and j["account"] == LAB_ACCOUNT]
-    lab_pending = [j for j in pending if LAB_ACCOUNT and j["account"] == LAB_ACCOUNT]
+    lab_running = [j for j in running if lab_account and j["account"] == lab_account]
+    lab_pending = [j for j in pending if lab_account and j["account"] == lab_account]
 
     # Per-user GPU occupancy across all running jobs (so labmates can see
     # who's holding which cards and reach out).
@@ -424,66 +475,98 @@ def fetch_cluster():
     return {
         "generated_at": pusher_ts or time.time(),
         "data_source": DATA_SOURCE,
-        "partitions": MISHA_PARTITIONS.split(","),
+        "cluster": cluster["slug"],
+        "partitions": cluster["partitions"].split(","),
         "nodes": nodes,
         "gpu_summary": gpu_summary_list,
         "running_jobs_total": len(running),
         "pending_jobs_total": len(pending),
         "lab_running": lab_running,
         "lab_pending": lab_pending,
-        "lab_account": LAB_ACCOUNT,
+        "lab_account": lab_account,
         "lab_netids": LAB_NETIDS,
         "gpu_users": gpu_users,
         "email_domain": os.environ.get("EMAIL_DOMAIN", "yale.edu"),
     }
 
 
-_cache = {"data": None, "ts": 0.0, "error": None}
+# One cache entry per cluster: each pusher has its own cadence, and a failure
+# on one cluster must not mark the other one stale.
+_cache = {slug: {"data": None, "ts": 0.0, "error": None} for slug in CLUSTERS}
 
 
-def get_data():
+def get_data(cluster):
+    c = _cache[cluster["slug"]]
     now = time.time()
-    if _cache["data"] and (now - _cache["ts"]) < CACHE_TTL and not _cache["error"]:
-        return _cache["data"]
+    if c["data"] and (now - c["ts"]) < CACHE_TTL and not c["error"]:
+        return c["data"]
     try:
-        data = fetch_cluster()
-        _cache["data"] = data
-        _cache["ts"] = now
-        _cache["error"] = None
+        data = fetch_cluster(cluster)
+        c["data"] = data
+        c["ts"] = now
+        c["error"] = None
         return data
     except Exception as e:
         msg = str(e)[:240]
-        if _cache["data"]:
-            stale = dict(_cache["data"])
+        if c["data"]:
+            stale = dict(c["data"])
             stale["stale"] = True
             stale["error"] = msg
-            stale["age_seconds"] = int(now - _cache["ts"])
+            stale["age_seconds"] = int(now - c["ts"])
             return stale
-        return {"error": msg, "nodes": [], "gpu_summary": [],
+        return {"error": msg, "cluster": cluster["slug"], "nodes": [], "gpu_summary": [],
                 "lab_running": [], "lab_pending": [], "running_jobs_total": 0,
-                "pending_jobs_total": 0, "lab_account": LAB_ACCOUNT,
+                "pending_jobs_total": 0, "lab_account": cluster["lab_account"],
                 "lab_netids": LAB_NETIDS, "generated_at": now}
 
 
 # ---------- Routes ----------
 
-@app.route("/")
-@login_required
-def index():
+def _render_cluster(cluster):
     return render_template(
         "index.html",
         display=session.get("display", session.get("user", "")),
         user=session.get("user", ""),
-        misha_host=MISHA_HOST,
-        partitions=MISHA_PARTITIONS,
-        lab_account=LAB_ACCOUNT,
+        cluster=cluster,
+        clusters=list(CLUSTERS.values()),
+        partitions=cluster["partitions"],
+        lab_account=cluster["lab_account"],
     )
+
+
+@app.route("/")
+@login_required
+def index():
+    return _render_cluster(CLUSTERS[DEFAULT_CLUSTER])
+
+
+@login_required
+def _cluster_page(slug):
+    return _render_cluster(CLUSTERS[slug])
+
+
+# Static routes (/azure, /login, ...) outrank this converter rule in Werkzeug's
+# matching order, so `/<slug>` only sees paths nothing else claimed. Unknown
+# slugs 404 before the login redirect so stray requests don't bounce to /login.
+@app.route("/<slug>")
+def cluster_page(slug):
+    if slug not in CLUSTERS:
+        abort(404)
+    return _cluster_page(slug)
 
 
 @app.route("/api/cluster")
 @login_required
 def api_cluster():
-    return jsonify(get_data())
+    return jsonify(get_data(CLUSTERS[DEFAULT_CLUSTER]))
+
+
+@app.route("/api/cluster/<slug>")
+@login_required
+def api_cluster_named(slug):
+    if slug not in CLUSTERS:
+        return jsonify({"error": f"unknown cluster {slug!r}"}), 404
+    return jsonify(get_data(CLUSTERS[slug]))
 
 
 @app.route("/azure")
@@ -508,7 +591,12 @@ def azure():
 
 @app.route("/healthz")
 def healthz():
-    return jsonify({"ok": True, "cache_age_seconds": int(time.time() - _cache["ts"]) if _cache["ts"] else None})
+    now = time.time()
+    return jsonify({
+        "ok": True,
+        "clusters": {slug: {"cache_age_seconds": int(now - c["ts"]) if c["ts"] else None}
+                     for slug, c in _cache.items()},
+    })
 
 
 if __name__ == "__main__":

@@ -5,9 +5,10 @@ Orientation for Claude Code working in this repo. The **full deploy runbook** is
 
 ## What this is
 Two things ship from this repo:
-1. **Misha Monitor** — Flask app (`app.py`) showing Yale HPC cluster GPU stats at `/`
-   (template `index.html`). Cluster data is pushed in from the HPC side (`misha-side/`,
-   `deploy/monitor-receive.sh`).
+1. **Cluster Monitor** — Flask app (`app.py`) showing Yale HPC GPU stats, one page per
+   cluster (template `index.html`): Misha at `/`, Bouchet at `/bouchet`. Cluster data is
+   pushed in from the HPC side (`misha-side/pusher.sbatch` runs unchanged on every cluster,
+   `deploy/monitor-receive.sh` files it by cluster). Adding a cluster: `DEPLOY_BOUCHET.md`.
 2. **Azure Usage dashboard** — `/azure` (login-required). Azure OpenAI / Cognitive Services
    spend for the `image-text-medical` resource group: Year/Month navigation, per-resource
    billing, per-model token/call usage, and a "Tracked resources" roster including idle/brand-new
@@ -22,13 +23,22 @@ from a separate dir so the Azure secret stays out of the web app):
   writing `estimated_cost_usd` into the snapshot; nothing renders it.
 
 ## Repo layout
-- `app.py` — routes `/`, `/login`, `/logout`, `/azure`, `/healthz`. `/azure` lazy-imports `azure_dashboard`.
+- `app.py` — routes `/` (default cluster), `/<slug>` (other clusters), `/api/cluster[/<slug>]`,
+  `/login`, `/logout`, `/azure`, `/healthz`. `/azure` lazy-imports `azure_dashboard`.
+  Clusters come from `CLUSTERS=misha,bouchet` in `.env` plus `<SLUG>_HOST/_PARTITIONS/
+  _SNAPSHOT_FILE/_LAB_ACCOUNT/_LABEL`; Misha also reads the original single-cluster names
+  (`SNAPSHOT_FILE`, `MISHA_PARTITIONS`, `LAB_ACCOUNT`). Cache + staleness are per cluster.
 - `azure_dashboard.py` — `build_context()` reads `usage.db`, returns per-month Plotly figure JSON
   + roster for `azure.html`. **No Azure calls** — it only reads the DB.
 - `templates/azure.html` — client-side month switching via `Plotly.react` (Plotly from CDN);
   defaults to the current month in **US Eastern**, auto-rolls on the 1st; `#YYYY-MM` deep-links.
 - `usage_monitor.py` / `dashboard.py` / `rates.json` — the pipeline (above).
 - `deploy/` — Caddyfile + systemd unit *templates* (REPLACE_ME placeholders; live units differ).
+  `deploy/monitor-receive.sh` is the forced command behind every pusher key in
+  `/home/monitor/.ssh/authorized_keys`: no argument → `/var/lib/monitor/snapshot.txt` (Misha),
+  `monitor-receive.sh bouchet` → `/var/lib/monitor/bouchet/snapshot.txt`. The KEY picks the
+  file, never the pushed bytes. Re-copy it to `/usr/local/bin/` when it changes (it is not
+  run from the repo).
 - **Runtime-only, NOT in git** (`.gitignore`): `.env`, `usage.db`, `users.json`, `.flask_secret`, `.venv/`.
 
 ## Local dev on a fresh machine
