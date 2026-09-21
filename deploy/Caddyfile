@@ -6,6 +6,8 @@
 #
 # Reload after edits:  sudo systemctl reload caddy
 
+# Live droplet (2026-09): `www.qingyuchen-lab-monitor.org { redir https://qingyuchen-lab-monitor.org{uri} permanent }`
+# and `qingyuchen-lab-monitor.org, mishamonitor.duckdns.org { ... }` — two names, one site block.
 misha.example.com {
     encode zstd gzip
 

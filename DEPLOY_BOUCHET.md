@@ -25,7 +25,7 @@ Do Phase D (droplet) first — it takes a minute and makes `/bouchet` exist
 
 | Field | Value |
 |---|---|
-| Droplet | `root@159.223.173.141` → `https://mishamonitor.duckdns.org` |
+| Droplet | `root@159.223.173.141` → `https://qingyuchen-lab-monitor.org` (alias: `mishamonitor.duckdns.org`) |
 | Bouchet login | `xw532@bouchet.ycrc.yale.edu` (Duo on every connection — do everything in one session) |
 | SLURM account | **`pi_qc88`** — the Chen lab is named differently on Bouchet (Misha: `q_chen`), and your *default* there is the old lab (`pi_mr2749`). List yours with `sacctmgr show assoc user=$USER format=Account -P`; put the right one in `pusher.sbatch` (B3) and `BOUCHET_LAB_ACCOUNT` (D2) |
 | Partitions to monitor | `gpu,gpu_devel,gpu_h100,gpu_h200,gpu_b200,gpu_rtx6000` — **verify in B1**; the pusher's `sinfo -p` fails on a name that does not exist |

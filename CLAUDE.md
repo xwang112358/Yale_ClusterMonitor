@@ -69,7 +69,11 @@ from a separate dir so the Azure secret stays out of the web app):
    `AZURE_USAGE_DB` pointing at the `usage.db`.
 
 ## Droplet (production)
-Host `cluster-monitor` = `root@159.223.173.141`, served at `https://mishamonitor.duckdns.org`.
+Host `cluster-monitor` = `root@159.223.173.141`, served at **`https://qingyuchen-lab-monitor.org`**
+(Cloudflare Registrar, DNS-only records, since 2026-09-21; `www` redirects to it). The original
+`mishamonitor.duckdns.org` is kept as an alias in the Caddyfile so old links work, but campus
+firewalls (Vanderbilt's Palo Alto, category "dynamic DNS") block it — never hand it out again.
+`PUBLIC_URL` in the app `.env` is the new name, so invite links carry it.
 - `/home/monitor/ClusterMonitor/` — this repo. Run by `misha-monitor.service`
   (gunicorn on `127.0.0.1:5111`, `User=monitor`); Caddy reverse-proxies with TLS. A `systemctl`
   drop-in sets `AZURE_USAGE_DB=/home/monitor/azure-usage-monitor/usage.db`.
