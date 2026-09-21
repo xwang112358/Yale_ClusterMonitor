@@ -25,7 +25,7 @@ Do Phase D (droplet) first — it takes a minute and makes `/bouchet` exist
 
 | Field | Value |
 |---|---|
-| Droplet | `root@159.223.173.141` → `https://qingyuchen-lab-monitor.org` (alias: `mishamonitor.duckdns.org`) |
+| Droplet | `root@159.223.173.141` → `https://qingyuchen-lab-monitor.org` (`mishamonitor.duckdns.org` redirects there) |
 | Bouchet login | `xw532@bouchet.ycrc.yale.edu` (Duo on every connection — do everything in one session) |
 | SLURM account | **`pi_qc88`** — the Chen lab is named differently on Bouchet (Misha: `q_chen`), and your *default* there is the old lab (`pi_mr2749`). List yours with `sacctmgr show assoc user=$USER format=Account -P`; put the right one in `pusher.sbatch` (B3) and `BOUCHET_LAB_ACCOUNT` (D2) |
 | Partitions to monitor | `gpu,gpu_devel,gpu_h100,gpu_h200,gpu_b200,gpu_rtx6000` — **verify in B1**; the pusher's `sinfo -p` fails on a name that does not exist |
@@ -85,7 +85,7 @@ curl -s http://127.0.0.1:5111/healthz
 `BOUCHET_PARTITIONS` must match what the Bouchet pusher polls (B3). If B1
 shows different partition names, fix both places.
 
-`https://mishamonitor.duckdns.org/bouchet` now renders, with Misha ⇄ Bouchet
+`https://qingyuchen-lab-monitor.org/bouchet` now renders, with Misha ⇄ Bouchet
 tabs in the header, and says "snapshot file missing" — expected until B5.
 Check that `/` (Misha) still shows live data before moving on.
 
@@ -196,7 +196,7 @@ Then on the droplet:
 ls -la /var/lib/monitor/bouchet/snapshot.txt && head -5 /var/lib/monitor/bouchet/snapshot.txt
 ```
 
-`https://mishamonitor.duckdns.org/bouchet` shows nodes now.
+`https://qingyuchen-lab-monitor.org/bouchet` shows nodes now.
 
 If the push prints `Permission denied (publickey)`: the D3 line is wrong or
 missing. If it prints `rejected: missing META section`: a partition name in

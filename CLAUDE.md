@@ -70,9 +70,10 @@ from a separate dir so the Azure secret stays out of the web app):
 
 ## Droplet (production)
 Host `cluster-monitor` = `root@159.223.173.141`, served at **`https://qingyuchen-lab-monitor.org`**
-(Cloudflare Registrar, DNS-only records, since 2026-09-21; `www` redirects to it). The original
-`mishamonitor.duckdns.org` is kept as an alias in the Caddyfile so old links work, but campus
-firewalls (Vanderbilt's Palo Alto, category "dynamic DNS") block it — never hand it out again.
+(Cloudflare Registrar, DNS-only records, since 2026-09-21). `www` and the original
+`mishamonitor.duckdns.org` are permanent redirects to it in the Caddyfile, so old links work, but
+campus firewalls (Vanderbilt's Palo Alto, category "dynamic DNS") block the DuckDNS name — never
+hand it out again.
 `PUBLIC_URL` in the app `.env` is the new name, so invite links carry it.
 - **Certificates come from ZeroSSL, not Let's Encrypt** (`tls { issuer zerossl { email ... } }` on every
   site block in the live Caddyfile). Vanderbilt's Palo Alto inspects connections to "new" domains and

@@ -1,6 +1,6 @@
 # Misha Monitor
 
-A small Flask dashboard that shows partition / node / GPU availability
+A small Flask dashboard (live at qingyuchen-lab-monitor.org) that shows partition / node / GPU availability
 for Yale's Misha and Bouchet clusters with a per-user login (Misha at
 `/`, Bouchet at `/bouchet`; each cluster pushes its own snapshot).
 

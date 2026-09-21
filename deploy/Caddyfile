@@ -7,7 +7,8 @@
 # Reload after edits:  sudo systemctl reload caddy
 
 # Live droplet (2026-09): `www.qingyuchen-lab-monitor.org { redir https://qingyuchen-lab-monitor.org{uri} permanent }`
-# and `qingyuchen-lab-monitor.org, mishamonitor.duckdns.org { ... }` — two names, one site block —
+# and `mishamonitor.duckdns.org { redir https://qingyuchen-lab-monitor.org{uri} permanent }`, with the
+# site block on `qingyuchen-lab-monitor.org` alone —
 # each with `tls { issuer zerossl { email ... } }` (see CLAUDE.md: Vanderbilt's firewall rejects LE's 2026 chain).
 misha.example.com {
     encode zstd gzip
