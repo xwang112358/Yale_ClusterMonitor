@@ -74,6 +74,13 @@ Host `cluster-monitor` = `root@159.223.173.141`, served at **`https://qingyuchen
 `mishamonitor.duckdns.org` is kept as an alias in the Caddyfile so old links work, but campus
 firewalls (Vanderbilt's Palo Alto, category "dynamic DNS") block it — never hand it out again.
 `PUBLIC_URL` in the app `.env` is the new name, so invite links carry it.
+- **Certificates come from ZeroSSL, not Let's Encrypt** (`tls { issuer zerossl { email ... } }` on every
+  site block in the live Caddyfile). Vanderbilt's Palo Alto inspects connections to "new" domains and
+  rejected LE's 2026 chain (leaf ← YE2 ← Root YE ← ISRG X2): it re-signed with its "VU Cybersecurity
+  Untrust" CA and reset the session. With the ZeroSSL chain the same connection passes. Don't switch
+  back to LE without re-testing through that VPN (`openssl s_client -servername ... 159.223.173.141:443`).
+  Vanderbilt's DNS (Infoblox, `10.52.144.1` on their VPN) separately sinkholes the new name to
+  `35.168.95.233` as a newly-observed domain; that is theirs to lift (ticket) or to age out.
 - `/home/monitor/ClusterMonitor/` — this repo. Run by `misha-monitor.service`
   (gunicorn on `127.0.0.1:5111`, `User=monitor`); Caddy reverse-proxies with TLS. A `systemctl`
   drop-in sets `AZURE_USAGE_DB=/home/monitor/azure-usage-monitor/usage.db`.
