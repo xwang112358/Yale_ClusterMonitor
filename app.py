@@ -464,10 +464,14 @@ def parse_tres(tres):
     cpus = int(TRES_CPU_RE.search(tres).group(1)) if TRES_CPU_RE.search(tres) else 0
     gpus = 0
     gpu_type = None
-    m = TRES_GPU_RE.search(tres)
-    if m:
-        gpu_type = m.group(1)
+    # SLURM lists the generic entry before the typed one
+    # ("gres/gpu=1,gres/gpu:h200=1"), so the first match alone would report
+    # every job as untyped. Prefer the typed entry when there is one.
+    for m in TRES_GPU_RE.finditer(tres):
         gpus = int(m.group(2))
+        if m.group(1):
+            gpu_type = m.group(1).lower()
+            break
     mem_mb = 0
     m = TRES_MEM_RE.search(tres)
     if m:
@@ -664,6 +668,26 @@ def fetch_cluster(cluster):
             cur = d.get("soonest_free_at")
             if cur is None or n["next_gpu_free_at"] < cur:
                 d["soonest_free_at"] = n["next_gpu_free_at"]
+    # Demand: what the pending queue is asking for, per GPU type. A release
+    # time alone misleads on a busy cluster (the freed card goes to the head
+    # of this queue, not to whoever is looking at the page), so each chip
+    # also shows how many jobs/cards are already waiting for that type.
+    # Requests with no type (gres/gpu=N, "any card") can land on any type;
+    # they are reported once, cluster-wide, rather than added to every chip.
+    pending_untyped_jobs = pending_untyped_gpus = 0
+    for j in pending:
+        if j.get("gpus", 0) <= 0:
+            continue
+        t = (j.get("gpu_type") or "").lower()
+        if t and t in gpu_summary:
+            gpu_summary[t]["pending_jobs"] = gpu_summary[t].get("pending_jobs", 0) + 1
+            gpu_summary[t]["pending_gpus"] = gpu_summary[t].get("pending_gpus", 0) + j["gpus"]
+        else:
+            pending_untyped_jobs += 1
+            pending_untyped_gpus += j["gpus"]
+    for d in gpu_summary.values():
+        d.setdefault("pending_jobs", 0)
+        d.setdefault("pending_gpus", 0)
     gpu_summary_list = sorted(gpu_summary.values(), key=lambda d: d["type"])
 
     lab_running = [j for j in running if lab_account and j["account"] == lab_account]
@@ -710,6 +734,8 @@ def fetch_cluster(cluster):
         "partitions": cluster["partitions"].split(","),
         "nodes": nodes,
         "gpu_summary": gpu_summary_list,
+        "pending_untyped_jobs": pending_untyped_jobs,
+        "pending_untyped_gpus": pending_untyped_gpus,
         "running_jobs_total": len(running),
         "pending_jobs_total": len(pending),
         "lab_running": lab_running,

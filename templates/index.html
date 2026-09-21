@@ -583,7 +583,7 @@ function setStatus(state, text) {
   document.getElementById('status-text').textContent = text;
 }
 
-function renderGpuSummary(summary) {
+function renderGpuSummary(summary, untypedJobs, untypedGpus) {
   const wrap = document.getElementById('gpu-summary');
   if (!summary || !summary.length) {
     wrap.innerHTML = '<div class="empty" style="grid-column:1/-1;">No GPU partitions found.</div>';
@@ -594,9 +594,20 @@ function renderGpuSummary(summary) {
     const free = s.total - s.alloc;
     totalAlloc += s.alloc; totalAll += s.total;
     const p = pct(s.alloc, s.total);
-    const soonest = (free === 0 && s.soonest_free_at)
-      ? `<div class="gsub" style="color:var(--accent);">next free in ${fmtRelative(s.soonest_free_at) || '?'}</div>`
-      : '';
+    // Demand first: cards already spoken for by the pending queue. Then the
+    // release bound: SLURM EndTime = start + requested walltime, so this is
+    // the LATEST the first card is released (jobs usually finish earlier),
+    // and the released card goes to the head of the queue, not to the viewer.
+    const demand = (s.pending_jobs > 0)
+      ? `<div class="gsub" style="color:var(--yellow);">${s.pending_jobs} job${s.pending_jobs === 1 ? '' : 's'} waiting for ${s.pending_gpus} ${s.type}</div>`
+      : `<div class="gsub">no jobs waiting for ${s.type}</div>`;
+    let soonest = '';
+    if (free === 0 && s.soonest_free_at) {
+      const rel = fmtRelative(s.soonest_free_at);
+      soonest = rel === 'overdue'
+        ? `<div class="gsub" style="color:var(--accent);" title="A job holding this card is past its walltime; SLURM is winding it down">first release overdue</div>`
+        : `<div class="gsub" style="color:var(--accent);" title="Earliest walltime expiry among jobs holding this card — an upper bound, jobs often end sooner">first release &le; ${rel || '?'}</div>`;
+    }
     // Only the high-end cards get the salloc helper — they're the cards
     // people scramble for. L40S/A40 are abundant enough that users
     // typically just `salloc` by hand.
@@ -631,13 +642,17 @@ function renderGpuSummary(summary) {
       <div class="gnum"><span class="free">${free}</span> free <span style="color:var(--text-dim);">/ ${s.total}</span></div>
       <div class="bar-wrap"><div class="bar-fill ${fillClass(p)}" style="width:${p.toFixed(1)}%"></div></div>
       <div class="gsub">${s.alloc} alloc &middot; ${s.nodes_with_free}/${s.nodes_total} nodes have free GPUs</div>
+      ${demand}
       ${soonest}
       ${grab}
     </div>`;
   }).join('');
   updateGrabPreviews();
-  document.getElementById('gpu-summary-meta').textContent =
-    `${totalAll - totalAlloc} GPUs free / ${totalAll} total`;
+  let meta = `${totalAll - totalAlloc} GPUs free / ${totalAll} total`;
+  if (untypedJobs > 0) {
+    meta += ` · ${untypedJobs} job${untypedJobs === 1 ? '' : 's'} waiting for ${untypedGpus} GPU${untypedGpus === 1 ? '' : 's'} of any type`;
+  }
+  document.getElementById('gpu-summary-meta').textContent = meta;
 }
 
 // Partition(s) to request for a GPU type: the monitored partitions whose
@@ -979,7 +994,7 @@ async function fetchData() {
       setStatus('', `live`);
     }
     if (data.email_domain) EMAIL_DOMAIN = data.email_domain;
-    renderGpuSummary(data.gpu_summary || []);
+    renderGpuSummary(data.gpu_summary || [], data.pending_untyped_jobs || 0, data.pending_untyped_gpus || 0);
     renderNodes(data.nodes || []);
     renderLab(data.lab_running || [], data.lab_pending || []);
     renderUsers(data.gpu_users || []);
