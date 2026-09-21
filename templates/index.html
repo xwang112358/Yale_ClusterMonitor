@@ -454,6 +454,7 @@
       {% if clusters|length > 1 %}{% for c in clusters %}
       <a href="{{ c.url }}" class="btn-nav{% if c.slug == cluster.slug %} active{% endif %}">{{ c.label }}</a>
       {% endfor %}{% endif %}
+      <a href="{{ cluster.history_url }}" class="btn-nav" title="When are the big cards free? Recorded every 30 minutes">History</a>
       <a href="/azure" class="btn-nav">Azure Usage <span class="arrow">&rarr;</span></a>
     </nav>
     <h1>{{ cluster.label }} Monitor<span class="host">{{ cluster.host }} &middot; {{ partitions }}</span></h1>
@@ -598,9 +599,13 @@ function renderGpuSummary(summary, untypedJobs, untypedGpus) {
     // release bound: SLURM EndTime = start + requested walltime, so this is
     // the LATEST the first card is released (jobs usually finish earlier),
     // and the released card goes to the head of the queue, not to the viewer.
+    // Held jobs (user hold, dependency, start time) cannot take a card
+    // whatever is free, so they are shown apart from the competing queue.
+    const held = s.pending_held > 0
+      ? ` <span style="color:var(--text-dim);" title="Held / dependency / not yet eligible — not competing for a card">· ${s.pending_held} held</span>` : '';
     const demand = (s.pending_jobs > 0)
-      ? `<div class="gsub" style="color:var(--yellow);">${s.pending_jobs} job${s.pending_jobs === 1 ? '' : 's'} waiting for ${s.pending_gpus} ${s.type}</div>`
-      : `<div class="gsub">no jobs waiting for ${s.type}</div>`;
+      ? `<div class="gsub" style="color:var(--yellow);">${s.pending_jobs} job${s.pending_jobs === 1 ? '' : 's'} waiting for ${s.pending_gpus} ${s.type}${held}</div>`
+      : `<div class="gsub">no jobs waiting for ${s.type}${held}</div>`;
     let soonest = '';
     if (free === 0 && s.soonest_free_at) {
       const rel = fmtRelative(s.soonest_free_at);

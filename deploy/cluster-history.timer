@@ -1,0 +1,18 @@
+# /etc/systemd/system/cluster-history.timer
+#
+# Runs cluster-history.service every 30 minutes. The pushers deliver a new
+# snapshot every minute; 30-minute sampling is enough for hour-of-week
+# patterns (2 samples per slot per week) and keeps history.db to a few MB
+# per year. Tighten OnUnitActiveSec if the analysis ever needs finer detail.
+
+[Unit]
+Description=Record cluster GPU history every 30 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30min
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

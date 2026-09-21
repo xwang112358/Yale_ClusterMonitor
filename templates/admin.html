@@ -25,6 +25,30 @@
 </div>
 {% endif %}
 
+<h2>Server</h2>
+<div class="kv">
+  {% if server.disk %}
+  <div><b>Disk</b> {{ '%.1f'|format(server.disk.free_gb) }} GB free of {{ '%.1f'|format(server.disk.total_gb) }} GB
+    <span class="pill {{ 'expired' if server.disk.used_pct >= 85 else ('pending' if server.disk.used_pct >= 70 else 'admin') }}">{{ '%.0f'|format(server.disk.used_pct) }}% used</span></div>
+  <div class="bar-wrap"><div class="bar-fill" style="width:{{ '%.0f'|format(server.disk.used_pct) }}%;background:{{ '#f44336' if server.disk.used_pct >= 85 else ('#ff9800' if server.disk.used_pct >= 70 else '#4caf50') }}"></div></div>
+  {% endif %}
+  {% if server.mem %}
+  <div><b>Memory</b> {{ '%.0f'|format(server.mem.available_mb) }} MB available of {{ '%.0f'|format(server.mem.total_mb) }} MB
+    <span class="pill {{ 'expired' if server.mem.used_pct >= 90 else ('pending' if server.mem.used_pct >= 75 else 'admin') }}">{{ '%.0f'|format(server.mem.used_pct) }}% used</span></div>
+  {% endif %}
+  {% if server.load %}
+  <div><b>Load</b> {{ '%.2f'|format(server.load[0]) }} / {{ '%.2f'|format(server.load[1]) }} / {{ '%.2f'|format(server.load[2]) }} (1 / 5 / 15 min) on {{ server.cpus }} CPU{{ '' if server.cpus == 1 else 's' }}</div>
+  {% endif %}
+  {% if server.uptime_days is not none %}
+  <div><b>Uptime</b> {{ '%.0f'|format(server.uptime_days) }} days</div>
+  {% endif %}
+  {% for f in server.files %}
+  <div><b>{{ f.label }}</b> {{ '%.1f'|format(f.mb) }} MB
+    <span style="color:var(--text-dim);">&middot; updated {% if f.age_s < 90 %}{{ f.age_s }} s{% elif f.age_s < 5400 %}{{ (f.age_s // 60) }} min{% else %}{{ '%.1f'|format(f.age_s / 3600) }} h{% endif %} ago</span></div>
+  {% endfor %}
+  {% if not server.disk and not server.mem %}<div style="color:var(--text-dim);">Server probes are unavailable on this host.</div>{% endif %}
+</div>
+
 <h2>Invite someone</h2>
 <form method="POST" action="{{ url_for('admin_invite') }}" class="inline-form" autocomplete="off">
   <input type="hidden" name="csrf" value="{{ csrf_token() }}">

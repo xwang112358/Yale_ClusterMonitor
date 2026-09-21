@@ -85,6 +85,7 @@ def _cluster_config(slug):
         "lab_account": env("LAB_ACCOUNT", LAB_ACCOUNT),
         "url": "/" if slug == CLUSTER_SLUGS[0] else f"/{slug}",
         "api_url": "/api/cluster" if slug == CLUSTER_SLUGS[0] else f"/api/cluster/{slug}",
+        "history_url": "/history" if slug == CLUSTER_SLUGS[0] else f"/history/{slug}",
     }
 
 
@@ -334,6 +335,53 @@ def account():
                            error=error, message=message, min_len=MIN_PASSWORD_LEN)
 
 
+def server_status():
+    """Droplet health for the admin page: disk, memory, load, and the data
+    files that grow (so the admin can judge when to resize). Every probe is
+    optional — on a non-Linux dev box the /proc reads simply yield None."""
+    import shutil
+    now = time.time()
+    st = {"disk": None, "mem": None, "load": None, "uptime_days": None,
+          "cpus": os.cpu_count(), "files": []}
+    try:
+        du = shutil.disk_usage("/")
+        st["disk"] = {"total_gb": du.total / 2**30, "free_gb": du.free / 2**30,
+                      "used_pct": 100.0 * (du.total - du.free) / du.total}
+    except OSError:
+        pass
+    try:
+        info = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                k, _, v = line.partition(":")
+                info[k.strip()] = int(v.split()[0])
+        st["mem"] = {"total_mb": info["MemTotal"] / 1024, "available_mb": info["MemAvailable"] / 1024,
+                     "used_pct": 100.0 * (info["MemTotal"] - info["MemAvailable"]) / info["MemTotal"]}
+    except (OSError, KeyError, ValueError):
+        pass
+    try:
+        st["load"] = os.getloadavg()
+    except (OSError, AttributeError):
+        pass
+    try:
+        with open("/proc/uptime") as f:
+            st["uptime_days"] = float(f.read().split()[0]) / 86400
+    except (OSError, ValueError):
+        pass
+    candidates = [("GPU history (history.db)", os.environ.get("HISTORY_DB", "/var/lib/monitor/history.db")),
+                  ("Azure usage (usage.db)", os.environ.get("AZURE_USAGE_DB", ""))]
+    candidates += [(f"{c['label']} snapshot", str(c["snapshot"])) for c in CLUSTERS.values()]
+    for label, path in candidates:
+        if not path:
+            continue
+        p = Path(path)
+        if p.exists():
+            s = p.stat()
+            st["files"].append({"label": label, "path": str(p), "mb": s.st_size / 2**20,
+                                "age_s": int(now - s.st_mtime)})
+    return st
+
+
 @app.route("/admin")
 @admin_required
 def admin():
@@ -352,6 +400,7 @@ def admin():
             "invite": status,
         })
     return render_template("admin.html", rows=rows, user=session["user"],
+                           server=server_status(),
                            ttl_days=INVITE_TTL // 86400,
                            new_invite=session.pop("new_invite", None),
                            messages=get_flashed_messages(with_categories=True))
@@ -402,6 +451,12 @@ SQUEUE_FMT_PD = ("JobID:15,UserName:15,Account:25,Partition:15,Reason:25,"
                  "TimeLimit:15,StartTime:22,tres-alloc:120,Name:60")
 
 GRES_RE = re.compile(r"gpu:([^:\s]+):(\d+)")
+# Pending-job reasons that mean "not eligible to start", whatever is free.
+# Such jobs are not competing for a card, so demand counts exclude them
+# (and shows them as "held"). Everything else — Resources, Priority, QOS and
+# account limits — is a job that will take a card as soon as it may.
+HELD_REASONS = {"JobHeldUser", "JobHeldAdmin", "Dependency", "DependencyNeverSatisfied",
+                "BeginTime", "JobArrayTaskLimit", "Reservation"}
 TRES_GPU_RE = re.compile(r"gres/gpu(?::([^=]+))?=(\d+)")
 TRES_CPU_RE = re.compile(r"\bcpu=(\d+)")
 TRES_MEM_RE = re.compile(r"\bmem=([\d.]+)([KMGT])")
@@ -674,11 +729,17 @@ def fetch_cluster(cluster):
     # also shows how many jobs/cards are already waiting for that type.
     # Requests with no type (gres/gpu=N, "any card") can land on any type;
     # they are reported once, cluster-wide, rather than added to every chip.
-    pending_untyped_jobs = pending_untyped_gpus = 0
+    pending_untyped_jobs = pending_untyped_gpus = pending_held_jobs = 0
     for j in pending:
         if j.get("gpus", 0) <= 0:
             continue
         t = (j.get("gpu_type") or "").lower()
+        held = (j.get("reason") or "").split("(")[0] in HELD_REASONS
+        if held:
+            pending_held_jobs += 1
+            if t and t in gpu_summary:
+                gpu_summary[t]["pending_held"] = gpu_summary[t].get("pending_held", 0) + 1
+            continue
         if t and t in gpu_summary:
             gpu_summary[t]["pending_jobs"] = gpu_summary[t].get("pending_jobs", 0) + 1
             gpu_summary[t]["pending_gpus"] = gpu_summary[t].get("pending_gpus", 0) + j["gpus"]
@@ -688,6 +749,7 @@ def fetch_cluster(cluster):
     for d in gpu_summary.values():
         d.setdefault("pending_jobs", 0)
         d.setdefault("pending_gpus", 0)
+        d.setdefault("pending_held", 0)
     gpu_summary_list = sorted(gpu_summary.values(), key=lambda d: d["type"])
 
     lab_running = [j for j in running if lab_account and j["account"] == lab_account]
@@ -736,6 +798,7 @@ def fetch_cluster(cluster):
         "gpu_summary": gpu_summary_list,
         "pending_untyped_jobs": pending_untyped_jobs,
         "pending_untyped_gpus": pending_untyped_gpus,
+        "pending_held_jobs": pending_held_jobs,
         "running_jobs_total": len(running),
         "pending_jobs_total": len(pending),
         "lab_running": lab_running,
@@ -824,6 +887,41 @@ def api_cluster_named(slug):
     if slug not in CLUSTERS:
         return jsonify({"error": f"unknown cluster {slug!r}"}), 404
     return jsonify(get_data(CLUSTERS[slug]))
+
+
+def _render_history(cluster):
+    try:
+        from history import build_history
+        ctx = build_history(cluster["slug"], days=request.args.get("days", 30, type=int))
+    except Exception as e:
+        ctx = {"error": f"Failed to build history: {e}", "days": 30, "ranges": [7, 30, 90],
+               "types": [], "span": None}
+    return render_template(
+        "history.html",
+        ctx=ctx,
+        cluster=cluster,
+        clusters=list(CLUSTERS.values()),
+        display=session.get("display", session.get("user", "")),
+        user=session.get("user", ""),
+    )
+
+
+@app.route("/history")
+@login_required
+def history():
+    return _render_history(CLUSTERS[DEFAULT_CLUSTER])
+
+
+@app.route("/history/<slug>")
+def history_named(slug):
+    if slug not in CLUSTERS:
+        abort(404)
+    return _history_named(slug)
+
+
+@login_required
+def _history_named(slug):
+    return _render_history(CLUSTERS[slug])
 
 
 @app.route("/azure")

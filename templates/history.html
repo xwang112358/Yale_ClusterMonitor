@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ cluster.label }} History</title>
+<link rel="icon" type="image/png" href="/static/img/favicon.png">
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<style>
+  :root {
+    --bg: #0f1117; --card: #1a1d27; --card-soft: #20232f; --card-border: #2a2d3a;
+    --text: #e0e0e0; --text-dim: #888; --accent: #6c8cff; --green: #4caf50;
+    --yellow: #ff9800; --red: #f44336;
+  }
+  html { font-size: 125%; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace; background: var(--bg); color: var(--text); padding: 20px; min-height: 100vh; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; padding-bottom: 14px; border-bottom: 1px solid var(--card-border); gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 1.2rem; font-weight: 600; letter-spacing: 0.5px; }
+  header h1 .host { color: var(--text-dim); font-weight: 400; font-size: 0.85rem; margin-left: 8px; }
+  .header-right { display: flex; gap: 14px; align-items: center; font-size: 0.78rem; color: var(--text-dim); }
+  .btn { background: var(--card); color: var(--accent); border: 1px solid var(--card-border); padding: 5px 12px; border-radius: 5px; font-family: inherit; font-size: 0.75rem; cursor: pointer; }
+  .btn:hover { border-color: var(--accent); text-decoration: none; }
+  a.btn-nav { display: inline-flex; align-items: center; gap: 8px; background: var(--card); border: 1px solid var(--accent); color: var(--accent); padding: 8px 18px; border-radius: 6px; font-size: 0.95rem; font-weight: 600; letter-spacing: 0.5px; }
+  a.btn-nav:hover { background: var(--accent); color: var(--bg); text-decoration: none; }
+  a.btn-nav.active { background: var(--accent); color: var(--bg); cursor: default; }
+  .cluster-nav { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .range { display: inline-flex; gap: 4px; }
+  .range a { padding: 5px 10px; border: 1px solid var(--card-border); border-radius: 5px; font-size: 0.75rem; color: var(--text-dim); }
+  .range a.active { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+  .section-title { font-size: 0.72rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1.2px; margin: 18px 0 10px; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .section-title .meta { text-transform: none; letter-spacing: 0.4px; }
+  .note { background: var(--card); border: 1px solid var(--card-border); border-radius: 8px; padding: 12px 14px; font-size: 0.76rem; color: var(--text-dim); line-height: 1.6; margin-bottom: 14px; }
+  .note b { color: var(--text); font-weight: 600; }
+  .type-block { background: var(--card); border: 1px solid var(--card-border); border-radius: 8px; padding: 14px; margin-bottom: 16px; }
+  .type-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+  .type-head .gtype { font-size: 0.95rem; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 1px; }
+  .type-head .meta { font-size: 0.7rem; color: var(--text-dim); }
+  .type-head .toggle { margin-left: auto; display: inline-flex; gap: 4px; }
+  .type-head .toggle button { background: var(--card-soft); color: var(--text-dim); border: 1px solid var(--card-border); border-radius: 4px; padding: 3px 9px; font-family: inherit; font-size: 0.68rem; cursor: pointer; }
+  .type-head .toggle button.on { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+  .charts { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 12px; }
+  @media (max-width: 1100px) { .charts { grid-template-columns: 1fr; } }
+  .plot { width: 100%; height: 300px; }
+  table.best { width: 100%; border-collapse: collapse; font-size: 0.72rem; margin-top: 10px; }
+  table.best th, table.best td { padding: 5px 10px; text-align: left; border-bottom: 1px solid var(--card-border); white-space: nowrap; }
+  table.best th { color: var(--text-dim); font-weight: 500; font-size: 0.64rem; text-transform: uppercase; letter-spacing: 1px; }
+  table.best td.num { font-variant-numeric: tabular-nums; }
+  .empty { padding: 18px 14px; color: var(--text-dim); font-size: 0.78rem; text-align: center; }
+  .footer { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--card-border); color: var(--text-dim); font-size: 0.7rem; }
+</style>
+</head>
+<body>
+<header>
+  <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+    <nav class="cluster-nav">
+      <a href="{{ cluster.url }}" class="btn-nav">&larr; Live</a>
+      {% if clusters|length > 1 %}{% for c in clusters %}
+      <a href="{{ c.history_url }}?days={{ ctx.days }}" class="btn-nav{% if c.slug == cluster.slug %} active{% endif %}">{{ c.label }}</a>
+      {% endfor %}{% endif %}
+    </nav>
+    <h1>{{ cluster.label }} History<span class="host">when are the big cards free</span></h1>
+  </div>
+  <div class="header-right">
+    <span class="range">
+      {% for r in ctx.ranges %}<a href="?days={{ r }}" class="{% if r == ctx.days %}active{% endif %}">{{ r }}d</a>{% endfor %}
+    </span>
+    <span class="who">{{ display }}</span>
+    <a href="/account" class="btn">Account</a>
+    <a href="/logout" class="btn">Sign out</a>
+  </div>
+</header>
+
+{% if ctx.error %}
+  <div class="empty">{{ ctx.error }}</div>
+{% else %}
+<div class="note">
+  <b>How to read this.</b> One sample every 30 minutes from the live snapshot, counts only.
+  <b>Chance of a free card</b> is the share of samples in that hour-of-week with at least one card of the type unallocated;
+  <b>average free</b> is the mean number of free cards. Hours are {{ ctx.tz }}, Monday first.
+  A card being free does not mean a new job gets it: the queue ahead of it (dashed line) is shown for that reason.
+  {% if ctx.span and ctx.span.days_recorded < 21 %}
+  <b>Only {{ ctx.span.days_recorded }} days recorded so far</b> &mdash; hour-of-week patterns need three weeks or more before they mean much.
+  {% endif %}
+</div>
+
+<div id="blocks"></div>
+{% endif %}
+
+<div class="footer">
+  {% if ctx.span and ctx.span.first %}
+  Recorded {{ ctx.span.samples }} samples &middot; from <span id="span-first"></span> to <span id="span-last"></span>
+  ({{ ctx.span.days_recorded }} days) &middot; window: last {{ ctx.days }} days
+  {% else %}No data yet.{% endif %}
+</div>
+
+<script>
+const CTX = {{ ctx|tojson }};
+const TYPE_COLORS = {h100: '#2563eb', h200: '#7c3aed', b200: '#ca8a04', a100: '#db2777', rtx_pro_6000_blackwell: '#c026d3'};
+const FONT = {family: "'SF Mono', 'Cascadia Code', 'Consolas', monospace", color: '#e0e0e0', size: 13};
+const BASE = {paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: FONT,
+              margin: {l: 48, r: 14, t: 30, b: 40}};
+const HOURS = [...Array(24).keys()];
+const CONFIG = {displayModeBar: false, responsive: true};
+
+function fmtTs(ts) {
+  return new Date(ts * 1000).toLocaleString('en-US', {timeZone: CTX.tz, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
+}
+if (CTX.span && CTX.span.first) {
+  document.getElementById('span-first').textContent = fmtTs(CTX.span.first);
+  document.getElementById('span-last').textContent = fmtTs(CTX.span.last);
+}
+
+function heatmap(el, t, mode) {
+  const h = CTX.heat[t];
+  const z = mode === 'p' ? h.p_any_free.map(r => r.map(v => v === null ? null : v * 100)) : h.avg_free;
+  const custom = h.n.map((r, d) => r.map((n, hr) => [n, h.avg_free[d][hr], h.p_any_free[d][hr]]));
+  Plotly.react(el, [{
+    type: 'heatmap', z, x: HOURS, y: CTX.day_names, customdata: custom,
+    colorscale: mode === 'p'
+      ? [[0, '#1a1d27'], [0.5, '#2e5a8f'], [1, '#6c8cff']]
+      : [[0, '#1a1d27'], [0.5, '#2e7d32'], [1, '#4caf50']],
+    zmin: 0, zmax: mode === 'p' ? 100 : Math.max(1, h.total),
+    xgap: 1, ygap: 1, hoverongaps: false,
+    colorbar: {thickness: 10, len: 0.9, tickfont: {size: 11}, title: {text: mode === 'p' ? '% free' : 'cards', font: {size: 11}}},
+    hovertemplate: '%{y} %{x}:00<br>avg free %{customdata[1]} · chance %{customdata[2]:.0%} · n=%{customdata[0]}<extra></extra>',
+  }], {...BASE, margin: {...BASE.margin, r: 80},   // room for the colorbar, else it overflows the column
+       title: {text: mode === 'p' ? 'Chance at least one card is free, by hour of week' : 'Average free cards, by hour of week', font: {size: 13}, x: 0},
+       xaxis: {title: {text: 'hour of day', font: {size: 11}}, dtick: 2, tickfont: {size: 11}, showgrid: false},
+       yaxis: {autorange: 'reversed', tickfont: {size: 11}, showgrid: false}}, CONFIG);
+}
+
+function timeline(el, t) {
+  const tl = CTX.timeline[t];
+  const x = tl.ts.map(s => new Date(s * 1000));
+  Plotly.react(el, [
+    {x, y: tl.free, type: 'scatter', mode: 'lines', name: 'free cards', line: {color: TYPE_COLORS[t] || '#6c8cff', width: 1.6},
+     hovertemplate: '%{x|%a %b %d %H:%M}<br>free %{y}<extra></extra>'},
+    {x, y: tl.pending_gpus, type: 'scatter', mode: 'lines', name: 'cards requested by queue', line: {color: '#ff9800', width: 1.2, dash: 'dot'},
+     yaxis: 'y2', hovertemplate: '%{x|%a %b %d %H:%M}<br>queued %{y}<extra></extra>'},
+  ], {...BASE, title: {text: `Free cards vs queued demand, last ${CTX.days} days`, font: {size: 13}, x: 0},
+      xaxis: {tickfont: {size: 11}, gridcolor: '#2a2d3a'},
+      yaxis: {title: {text: 'free', font: {size: 11}}, rangemode: 'tozero', tickfont: {size: 11}, gridcolor: '#2a2d3a'},
+      yaxis2: {title: {text: 'queued', font: {size: 11}}, overlaying: 'y', side: 'right', rangemode: 'tozero', tickfont: {size: 11}, showgrid: false},
+      legend: {orientation: 'h', y: 1.12, x: 0, font: {size: 11}}, hovermode: 'x unified'}, CONFIG);
+}
+
+function bestTable(t) {
+  const rows = CTX.best[t] || [];
+  if (!rows.length) return '<div class="empty">Not enough samples yet for a ranking.</div>';
+  return `<table class="best"><thead><tr><th>Best slots</th><th>chance of a free card</th><th>avg free</th><th>samples</th></tr></thead><tbody>` +
+    rows.map(r => `<tr><td>${r.day} ${String(r.hour).padStart(2, '0')}:00–${String(r.hour + 1).padStart(2, '0')}:00</td>
+      <td class="num">${Math.round((r.p_any_free || 0) * 100)}%</td><td class="num">${r.avg_free}</td><td class="num">${r.n}</td></tr>`).join('') +
+    `</tbody></table>`;
+}
+
+const blocks = document.getElementById('blocks');
+if (blocks) {
+  if (!CTX.types.length) {
+    blocks.innerHTML = '<div class="empty">No high-end GPU types recorded for this cluster.</div>';
+  }
+  for (const t of CTX.types) {
+    const id = t.replace(/[^a-z0-9]/g, '_');
+    const div = document.createElement('div');
+    div.className = 'type-block';
+    div.innerHTML = `
+      <div class="type-head">
+        <span class="gtype">${t}</span>
+        <span class="meta">${CTX.heat[t].total} cards on the cluster</span>
+        <span class="toggle"><button class="on" data-mode="p">chance free</button><button data-mode="a">avg free</button></span>
+      </div>
+      <div class="charts"><div id="heat-${id}" class="plot"></div><div id="tl-${id}" class="plot"></div></div>
+      ${bestTable(t)}`;
+    blocks.appendChild(div);
+    heatmap(document.getElementById(`heat-${id}`), t, 'p');
+    timeline(document.getElementById(`tl-${id}`), t);
+    div.querySelectorAll('.toggle button').forEach(b => b.addEventListener('click', () => {
+      div.querySelectorAll('.toggle button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      heatmap(document.getElementById(`heat-${id}`), t, b.dataset.mode);
+    }));
+  }
+}
+</script>
+</body>
+</html>

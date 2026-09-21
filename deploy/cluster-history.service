@@ -1,0 +1,27 @@
+# /etc/systemd/system/cluster-history.service
+#
+# One pass of recorder.py: read each cluster's snapshot, append per-GPU-type
+# aggregates to /var/lib/monitor/history.db, roll up hourly, apply retention.
+# Driven by cluster-history.timer every 30 minutes. Uses the app's .env so it
+# sees the same CLUSTERS / snapshot paths as the dashboard; HISTORY_DB must be
+# set in that .env too (the /history page reads the same file).
+#
+# Install:
+#   sudo cp deploy/cluster-history.service deploy/cluster-history.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now cluster-history.timer
+#   sudo systemctl start cluster-history.service        # first pass now
+#   sudo -u monitor HISTORY_DB=/var/lib/monitor/history.db \
+#        /home/monitor/ClusterMonitor/.venv/bin/python /home/monitor/ClusterMonitor/recorder.py --stats
+
+[Unit]
+Description=Record cluster GPU availability aggregates (history.db)
+
+[Service]
+Type=oneshot
+User=monitor
+WorkingDirectory=/home/monitor/ClusterMonitor
+EnvironmentFile=/home/monitor/ClusterMonitor/.env
+Environment=HISTORY_DB=/var/lib/monitor/history.db
+ExecStart=/home/monitor/ClusterMonitor/.venv/bin/python recorder.py
+Nice=10

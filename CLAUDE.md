@@ -46,6 +46,14 @@ from a separate dir so the Azure secret stays out of the web app):
   `/account` changes your own password. State-changing POSTs carry a session CSRF token.
   `manage_users.py` is bootstrap/emergency only (`invite`, `admin`, `rename`, `add`, `reset`).
   `PUBLIC_URL` in `.env` sets the link host; ProxyFix trusts Caddy's forwarded headers.
+- **History** (`recorder.py` → `/var/lib/monitor/history.db` → `history.py` → `templates/history.html`
+  at `/history[/<slug>]`): `cluster-history.timer` (30 min, units in `deploy/`) runs `recorder.py`,
+  which reuses `app.fetch_cluster()` and stores COUNTS per (ts, cluster, gpu_type) — never per
+  user/job (policy: mirror live scheduler output, don't archive named activity). Raw rows kept
+  90 days, `hourly` rollup forever. `HISTORY_DB` must be in the app `.env` AND the service unit.
+  `HISTORY_GPU_TYPES` (default a100,h100,h200,b200,rtx_pro_6000_blackwell) scopes the page;
+  hours are US Eastern. Charts are Plotly client-side — the 1-vCPU/458 MB droplet does no chart
+  work. Demand excludes held jobs (`HELD_REASONS`), shown as "· N held".
 - **Runtime-only, NOT in git** (`.gitignore`): `.env`, `usage.db`, `users.json`, `.flask_secret`, `.venv/`.
 
 ## Local dev on a fresh machine
@@ -71,6 +79,8 @@ Host `cluster-monitor` = `root@159.223.173.141`, served at `https://mishamonitor
     calls Cost Management.
   - `azure-usage-metrics.timer` (**30 min**) → `usage_monitor.py --metrics-only`: refreshes token
     per-model token/call metrics, skips Cost Management (replays cached `billed_costs` so Billed never drops).
+  - `cluster-history.timer` (**30 min**) → `ClusterMonitor/recorder.py` → `/var/lib/monitor/history.db`
+    (GPU availability history for `/history`; `recorder.py --stats` shows what is recorded).
 - Shared venv: `/home/monitor/ClusterMonitor/.venv` (used by both the app and the pipeline).
 
 ### Deploy (push → pull; full version in DEPLOY_AZURE.md)

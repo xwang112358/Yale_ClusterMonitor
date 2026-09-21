@@ -17,8 +17,12 @@ original Vanderbilt-specific code is preserved in [archive/](archive/).
 - **Lab queue panel**: running and pending jobs for your SLURM account.
 - **Click any node** to see the jobs running on it (jobid, user,
   account, GPUs, time used / time limit).
-- **Username + password login** — accounts managed via
-  [manage_users.py](manage_users.py); passwords hashed with PBKDF2.
+- **History** (`/history`): when are the big cards (A100/H100/H200/B200/RTX Pro 6000)
+  free — hour-of-week heatmaps, free-vs-queued timelines and best-slot tables, from
+  aggregates recorded every 30 minutes by [recorder.py](recorder.py). Counts only, never
+  per-user data.
+- **Username + password login** — invite links from the admin page; passwords hashed
+  with scrypt; [manage_users.py](manage_users.py) for bootstrap/emergencies.
 
 ## How it works
 
