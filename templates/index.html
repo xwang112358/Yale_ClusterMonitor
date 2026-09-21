@@ -454,7 +454,7 @@
       {% if clusters|length > 1 %}{% for c in clusters %}
       <a href="{{ c.url }}" class="btn-nav{% if c.slug == cluster.slug %} active{% endif %}">{{ c.label }}</a>
       {% endfor %}{% endif %}
-      <a href="{{ cluster.history_url }}" class="btn-nav" title="When are the big cards free? Recorded every 30 minutes">History</a>
+      <a href="{{ cluster.history_url }}" class="btn-nav" title="When are the big cards free? Recorded every 30 minutes">Analysis</a>
       <a href="/azure" class="btn-nav">Azure Usage <span class="arrow">&rarr;</span></a>
     </nav>
     <h1>{{ cluster.label }} Monitor<span class="host">{{ cluster.host }} &middot; {{ partitions }}</span></h1>

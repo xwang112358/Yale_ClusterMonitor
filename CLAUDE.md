@@ -46,7 +46,7 @@ from a separate dir so the Azure secret stays out of the web app):
   `/account` changes your own password. State-changing POSTs carry a session CSRF token.
   `manage_users.py` is bootstrap/emergency only (`invite`, `admin`, `rename`, `add`, `reset`).
   `PUBLIC_URL` in `.env` sets the link host; ProxyFix trusts Caddy's forwarded headers.
-- **History** (`recorder.py` → `/var/lib/monitor/history.db` → `history.py` → `templates/history.html`
+- **Analysis** (nav button "Analysis"; `recorder.py` → `/var/lib/monitor/history.db` → `history.py` → `templates/history.html`
   at `/history[/<slug>]`): `cluster-history.timer` (30 min, units in `deploy/`) runs `recorder.py`,
   which reuses `app.fetch_cluster()` and stores COUNTS per (ts, cluster, gpu_type) — never per
   user/job (policy: mirror live scheduler output, don't archive named activity). Raw rows kept

@@ -17,7 +17,7 @@ original Vanderbilt-specific code is preserved in [archive/](archive/).
 - **Lab queue panel**: running and pending jobs for your SLURM account.
 - **Click any node** to see the jobs running on it (jobid, user,
   account, GPUs, time used / time limit).
-- **History** (`/history`): when are the big cards (A100/H100/H200/B200/RTX Pro 6000)
+- **Analysis** (`/history`): when are the big cards (A100/H100/H200/B200/RTX Pro 6000)
   free — hour-of-week heatmaps, free-vs-queued timelines and best-slot tables, from
   aggregates recorded every 30 minutes by [recorder.py](recorder.py). Counts only, never
   per-user data.

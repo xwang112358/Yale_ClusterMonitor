@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{{ cluster.label }} History</title>
+<title>{{ cluster.label }} Analysis</title>
 <link rel="icon" type="image/png" href="/static/img/favicon.png">
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 <style>
@@ -61,7 +61,7 @@
       <a href="{{ c.history_url }}?days={{ ctx.days }}" class="btn-nav{% if c.slug == cluster.slug %} active{% endif %}">{{ c.label }}</a>
       {% endfor %}{% endif %}
     </nav>
-    <h1>{{ cluster.label }} History<span class="host">when are the big cards free</span></h1>
+    <h1>{{ cluster.label }} Analysis<span class="host">when are the big cards free</span></h1>
   </div>
   <div class="header-right">
     <span class="range">
