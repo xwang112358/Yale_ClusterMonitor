@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Record compact GPU-availability aggregates from the cluster snapshots.
 
-Runs every 30 minutes from cluster-history.timer (deploy/) as the `monitor`
+Runs every 5 minutes from cluster-history.timer (deploy/) as the `monitor`
 user with the app's .env. It reads each cluster's snapshot through app.py's
 own parser and appends per-GPU-type COUNTS to HISTORY_DB (SQLite). Nothing
 per user or per job is stored (see the policy notes in DEPLOY.md): the
 archive is aggregates only. /history renders it (history.py).
 
 Tables
-  samples          (ts, cluster, gpu_type) one per timer tick (30 min); raw rows kept HISTORY_RAW_DAYS
+  samples          (ts, cluster, gpu_type) one per timer tick (5 min); raw rows kept HISTORY_RAW_DAYS
   cluster_samples  (ts, cluster) running / pending totals
   hourly           per-hour rollup of samples, kept forever (a few MB per year)
 

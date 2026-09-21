@@ -47,7 +47,7 @@ from a separate dir so the Azure secret stays out of the web app):
   `manage_users.py` is bootstrap/emergency only (`invite`, `admin`, `rename`, `add`, `reset`).
   `PUBLIC_URL` in `.env` sets the link host; ProxyFix trusts Caddy's forwarded headers.
 - **Analysis** (nav button "Analysis"; `recorder.py` → `/var/lib/monitor/history.db` → `history.py` → `templates/history.html`
-  at `/history[/<slug>]`): `cluster-history.timer` (30 min, units in `deploy/`) runs `recorder.py`,
+  at `/history[/<slug>]`): `cluster-history.timer` (5 min, units in `deploy/`) runs `recorder.py`,
   which reuses `app.fetch_cluster()` and stores COUNTS per (ts, cluster, gpu_type) — never per
   user/job (policy: mirror live scheduler output, don't archive named activity). Raw rows kept
   90 days, `hourly` rollup forever. `HISTORY_DB` must be in the app `.env` AND the service unit.
@@ -79,7 +79,7 @@ Host `cluster-monitor` = `root@159.223.173.141`, served at `https://mishamonitor
     calls Cost Management.
   - `azure-usage-metrics.timer` (**30 min**) → `usage_monitor.py --metrics-only`: refreshes token
     per-model token/call metrics, skips Cost Management (replays cached `billed_costs` so Billed never drops).
-  - `cluster-history.timer` (**30 min**) → `ClusterMonitor/recorder.py` → `/var/lib/monitor/history.db`
+  - `cluster-history.timer` (**5 min**) → `ClusterMonitor/recorder.py` → `/var/lib/monitor/history.db`
     (GPU availability history for `/history`; `recorder.py --stats` shows what is recorded).
 - Shared venv: `/home/monitor/ClusterMonitor/.venv` (used by both the app and the pipeline).
 

@@ -2,7 +2,7 @@
 #
 # One pass of recorder.py: read each cluster's snapshot, append per-GPU-type
 # aggregates to /var/lib/monitor/history.db, roll up hourly, apply retention.
-# Driven by cluster-history.timer every 30 minutes. Uses the app's .env so it
+# Driven by cluster-history.timer every 5 minutes. Uses the app's .env so it
 # sees the same CLUSTERS / snapshot paths as the dashboard; HISTORY_DB must be
 # set in that .env too (the /history page reads the same file).
 #

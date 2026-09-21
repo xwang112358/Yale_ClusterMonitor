@@ -19,7 +19,7 @@ original Vanderbilt-specific code is preserved in [archive/](archive/).
   account, GPUs, time used / time limit).
 - **Analysis** (`/history`): when are the big cards (A100/H100/H200/B200/RTX Pro 6000)
   free — hour-of-week heatmaps, free-vs-queued timelines and best-slot tables, from
-  aggregates recorded every 30 minutes by [recorder.py](recorder.py). Counts only, never
+  aggregates recorded every 5 minutes by [recorder.py](recorder.py). Counts only, never
   per-user data.
 - **Username + password login** — invite links from the admin page; passwords hashed
   with scrypt; [manage_users.py](manage_users.py) for bootstrap/emergencies.

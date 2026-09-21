@@ -68,7 +68,7 @@ def build_history(slug, days=30, now=None):
             ctx["error"] = "Nothing recorded for this cluster yet."
             return ctx
 
-        # Source rows: raw 30-min samples inside the raw-retention window,
+        # Source rows: raw 5-min samples inside the raw-retention window,
         # hourly averages beyond it (older raw rows are gone by design).
         rows = conn.execute(
             "SELECT ts, gpu_type, free, total, pending_gpus, pending_jobs FROM samples "
@@ -81,7 +81,7 @@ def build_history(slug, days=30, now=None):
                 (slug, since, raw_lo or now)).fetchall()
             rows = [(h, t, af, at, ap, 0) for (h, t, af, at, ap, _n) in hrows] + rows
 
-        bucket = 3600 if days > 7 else 1800       # timeline resolution: 30 min / 1 h
+        bucket = 3600 if days > 7 else 900        # timeline resolution: 15 min / 1 h
         for t in types:
             heat_sum, heat_n, heat_any = _grid(), _grid(0), _grid(0)
             tl = {}
