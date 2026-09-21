@@ -14,7 +14,7 @@ Usage:
   python manage_users.py remove <username>
   python manage_users.py list
 
-Set PUBLIC_URL (e.g. https://mishamonitor.duckdns.org) for `invite` to print
+Set PUBLIC_URL (e.g. https://qingyuchen-lab-monitor.org) for `invite` to print
 a full link; otherwise it prints the path.
 """
 

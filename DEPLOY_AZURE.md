@@ -54,7 +54,7 @@ sudo -u monitor bash -lc 'cd ~/azure-usage-monitor && ~/ClusterMonitor/.venv/bin
 ```
 
 The 4-hour timer then keeps the rolling 2-month window fresh automatically — no timer
-change required. Verify at `https://mishamonitor.duckdns.org/azure`: the Year/Month bar
+change required. Verify at `https://qingyuchen-lab-monitor.org/azure`: the Year/Month bar
 should show every month with data, defaulting to the current month.
 
 > **Optional (never copy again):** instead of step 2's `cp`, point the timer at the repo
@@ -277,7 +277,7 @@ This is simpler but you have to remember to run it. Cost Management lags
 
 ## Step 4 — Verify
 
-1. Visit `https://mishamonitor.duckdns.org/` → log in → confirm the
+1. Visit `https://qingyuchen-lab-monitor.org/` → log in → confirm the
    "Azure Usage →" button is in the top-left of the header.
 2. Click it → `/azure` should show KPIs, the resource bar chart, and the
    per-resource dropdown.

@@ -128,7 +128,7 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 # password reset. manage_users.py is the bootstrap/emergency path.
 
 INVITE_TTL = int(os.environ.get("INVITE_TTL_SECONDS", str(7 * 24 * 3600)))
-PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")   # e.g. https://mishamonitor.duckdns.org
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")   # e.g. https://qingyuchen-lab-monitor.org
 MIN_PASSWORD_LEN = 10
 USERNAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,31}")
 
