@@ -53,7 +53,11 @@ from a separate dir so the Azure secret stays out of the web app):
   90 days, `hourly` rollup forever. `HISTORY_DB` must be in the app `.env` AND the service unit.
   `HISTORY_GPU_TYPES` (default a100,h100,h200,b200,rtx_pro_6000_blackwell) scopes the page;
   hours are US Eastern. Charts are Plotly client-side — the 1-vCPU/458 MB droplet does no chart
-  work. Demand excludes held jobs (`HELD_REASONS`), shown as "· N held".
+  work. Demand excludes held jobs (`HELD_REASONS`, "· N held") and quota-capped jobs
+  (`QUOTA_REASON_RE`: QOS*/Max*/Assoc*/*Limit, "· N quota-capped"); only Priority/Resources
+  jobs count as waiting. **Free excludes cards on drained/down nodes** (`UNAVAILABLE_STATES`;
+  `parse_sinfo` strips sinfo's state markers like `drained*`) — a drained node's idle H100s
+  read as "4 free" for a day before this. The recorder stores that corrected `free`.
 - **Runtime-only, NOT in git** (`.gitignore`): `.env`, `usage.db`, `users.json`, `.flask_secret`, `.venv/`.
 
 ## Local dev on a fresh machine

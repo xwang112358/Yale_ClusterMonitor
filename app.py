@@ -457,6 +457,17 @@ GRES_RE = re.compile(r"gpu:([^:\s]+):(\d+)")
 # account limits — is a job that will take a card as soon as it may.
 HELD_REASONS = {"JobHeldUser", "JobHeldAdmin", "Dependency", "DependencyNeverSatisfied",
                 "BeginTime", "JobArrayTaskLimit", "Reservation"}
+# Pending-job reasons that mean "this user/account is at a quota": the job will
+# take a card once its own earlier jobs finish, so free hardware does not help
+# it and it does not compete for the card being released right now.
+QUOTA_REASON_RE = re.compile(r"^(QOS|Max|Assoc|Grp)|Limit")
+# Node states in which SLURM will not place a job, so unallocated cards on such
+# a node are not free: an admin drained r817u29n06 and its 4 idle H100s read as
+# "4 free" for a day. sinfo suffixes the state with markers (drained*, mixed-);
+# parse_sinfo strips them so these names match.
+UNAVAILABLE_STATES = {"down", "drain", "drained", "draining", "maint", "fail", "failing",
+                      "unknown", "inval", "future"}
+STATE_MARKERS = "*~#!%@$-+^"
 TRES_GPU_RE = re.compile(r"gres/gpu(?::([^=]+))?=(\d+)")
 TRES_CPU_RE = re.compile(r"\bcpu=(\d+)")
 TRES_MEM_RE = re.compile(r"\bmem=([\d.]+)([KMGT])")
@@ -577,7 +588,8 @@ def parse_sinfo(raw):
             "gpu_type": gtype,
             "gpu_alloc": gused,
             "gpu_total": gtotal,
-            "state": state.lower(),
+            "state": state.lower().rstrip(STATE_MARKERS),
+            "state_raw": state,
             "jobs": [],
         }
     return list(by_host.values())
@@ -716,7 +728,11 @@ def fetch_cluster(cluster):
         d["total"] += n["gpu_total"]
         d["alloc"] += n["gpu_alloc"]
         d["nodes_total"] += 1
-        if n["gpu_alloc"] < n["gpu_total"] and n["state"] not in ("down", "drain", "drained", "maint"):
+        unavailable = n["state"] in UNAVAILABLE_STATES
+        if unavailable:
+            # Cards SLURM cannot hand out: not allocated, but not free either.
+            d["unavailable"] = d.get("unavailable", 0) + (n["gpu_total"] - n["gpu_alloc"])
+        if n["gpu_alloc"] < n["gpu_total"] and not unavailable:
             d["nodes_with_free"] += 1
         # Track earliest GPU-job end among nodes of this type that are full.
         if n["gpu_alloc"] >= n["gpu_total"] and n.get("next_gpu_free_at"):
@@ -729,16 +745,21 @@ def fetch_cluster(cluster):
     # also shows how many jobs/cards are already waiting for that type.
     # Requests with no type (gres/gpu=N, "any card") can land on any type;
     # they are reported once, cluster-wide, rather than added to every chip.
-    pending_untyped_jobs = pending_untyped_gpus = pending_held_jobs = 0
+    pending_untyped_jobs = pending_untyped_gpus = pending_held_jobs = pending_quota_jobs = 0
     for j in pending:
         if j.get("gpus", 0) <= 0:
             continue
         t = (j.get("gpu_type") or "").lower()
-        held = (j.get("reason") or "").split("(")[0] in HELD_REASONS
-        if held:
+        reason = (j.get("reason") or "").split("(")[0]
+        if reason in HELD_REASONS:
             pending_held_jobs += 1
             if t and t in gpu_summary:
                 gpu_summary[t]["pending_held"] = gpu_summary[t].get("pending_held", 0) + 1
+            continue
+        if QUOTA_REASON_RE.search(reason):
+            pending_quota_jobs += 1
+            if t and t in gpu_summary:
+                gpu_summary[t]["pending_quota"] = gpu_summary[t].get("pending_quota", 0) + 1
             continue
         if t and t in gpu_summary:
             gpu_summary[t]["pending_jobs"] = gpu_summary[t].get("pending_jobs", 0) + 1
@@ -750,6 +771,9 @@ def fetch_cluster(cluster):
         d.setdefault("pending_jobs", 0)
         d.setdefault("pending_gpus", 0)
         d.setdefault("pending_held", 0)
+        d.setdefault("pending_quota", 0)
+        d.setdefault("unavailable", 0)
+        d["free"] = max(0, d["total"] - d["alloc"] - d["unavailable"])
     gpu_summary_list = sorted(gpu_summary.values(), key=lambda d: d["type"])
 
     lab_running = [j for j in running if lab_account and j["account"] == lab_account]
@@ -799,6 +823,7 @@ def fetch_cluster(cluster):
         "pending_untyped_jobs": pending_untyped_jobs,
         "pending_untyped_gpus": pending_untyped_gpus,
         "pending_held_jobs": pending_held_jobs,
+        "pending_quota_jobs": pending_quota_jobs,
         "running_jobs_total": len(running),
         "pending_jobs_total": len(pending),
         "lab_running": lab_running,

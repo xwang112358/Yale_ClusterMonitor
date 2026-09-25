@@ -563,7 +563,7 @@ function fmtAbsolute(targetIso) {
 }
 
 function nodeRowClass(allocPct, state) {
-  if (['down','drain','drained','maint','fail','unknown'].includes(state)) return 'unhealthy';
+  if (['down','drain','drained','draining','maint','fail','failing','unknown','inval','future'].includes(state)) return 'unhealthy';
   if (allocPct === 0) return 'idle';
   if (allocPct < 35) return 'low';
   if (allocPct < 70) return 'mid';
@@ -590,10 +590,11 @@ function renderGpuSummary(summary, untypedJobs, untypedGpus) {
     wrap.innerHTML = '<div class="empty" style="grid-column:1/-1;">No GPU partitions found.</div>';
     return;
   }
-  let totalAlloc = 0, totalAll = 0;
+  let totalFree = 0, totalAll = 0, totalUnavail = 0;
   wrap.innerHTML = summary.map(s => {
-    const free = s.total - s.alloc;
-    totalAlloc += s.alloc; totalAll += s.total;
+    // s.free excludes cards on drained/down nodes (SLURM cannot hand those out).
+    const free = (s.free ?? (s.total - s.alloc));
+    totalFree += free; totalAll += s.total; totalUnavail += (s.unavailable || 0);
     const p = pct(s.alloc, s.total);
     // Demand first: cards already spoken for by the pending queue. Then the
     // release bound: SLURM EndTime = start + requested walltime, so this is
@@ -601,8 +602,10 @@ function renderGpuSummary(summary, untypedJobs, untypedGpus) {
     // and the released card goes to the head of the queue, not to the viewer.
     // Held jobs (user hold, dependency, start time) cannot take a card
     // whatever is free, so they are shown apart from the competing queue.
-    const held = s.pending_held > 0
-      ? ` <span style="color:var(--text-dim);" title="Held / dependency / not yet eligible — not competing for a card">· ${s.pending_held} held</span>` : '';
+    const quota = s.pending_quota > 0
+      ? ` <span style="color:var(--text-dim);" title="At a per-user / per-account quota — waits for its own jobs to finish, not for a free card">· ${s.pending_quota} quota-capped</span>` : '';
+    const held = (s.pending_held > 0
+      ? ` <span style="color:var(--text-dim);" title="Held / dependency / not yet eligible — not competing for a card">· ${s.pending_held} held</span>` : '') + quota;
     const demand = (s.pending_jobs > 0)
       ? `<div class="gsub" style="color:var(--yellow);">${s.pending_jobs} job${s.pending_jobs === 1 ? '' : 's'} waiting for ${s.pending_gpus} ${s.type}${held}</div>`
       : `<div class="gsub">no jobs waiting for ${s.type}${held}</div>`;
@@ -646,14 +649,15 @@ function renderGpuSummary(summary, untypedJobs, untypedGpus) {
       <div class="gtype">${s.type}</div>
       <div class="gnum"><span class="free">${free}</span> free <span style="color:var(--text-dim);">/ ${s.total}</span></div>
       <div class="bar-wrap"><div class="bar-fill ${fillClass(p)}" style="width:${p.toFixed(1)}%"></div></div>
-      <div class="gsub">${s.alloc} alloc &middot; ${s.nodes_with_free}/${s.nodes_total} nodes have free GPUs</div>
+      <div class="gsub">${s.alloc} alloc &middot; ${s.nodes_with_free}/${s.nodes_total} nodes have free GPUs${s.unavailable ? ` &middot; <span title="Unallocated cards on drained / down nodes — SLURM will not schedule them">${s.unavailable} on drained nodes</span>` : ''}</div>
       ${demand}
       ${soonest}
       ${grab}
     </div>`;
   }).join('');
   updateGrabPreviews();
-  let meta = `${totalAll - totalAlloc} GPUs free / ${totalAll} total`;
+  let meta = `${totalFree} GPUs free / ${totalAll} total`;
+  if (totalUnavail > 0) meta += ` · ${totalUnavail} on drained nodes`;
   if (untypedJobs > 0) {
     meta += ` · ${untypedJobs} job${untypedJobs === 1 ? '' : 's'} waiting for ${untypedGpus} GPU${untypedGpus === 1 ? '' : 's'} of any type`;
   }

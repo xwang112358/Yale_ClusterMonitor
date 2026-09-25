@@ -92,7 +92,7 @@ def record(conn, slug, data):
     for g in data.get("gpu_summary", []):
         cur = conn.execute(
             "INSERT OR IGNORE INTO samples VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (ts, slug, g["type"].lower(), g["total"], g["alloc"], g["total"] - g["alloc"],
+            (ts, slug, g["type"].lower(), g["total"], g["alloc"], g.get("free", g["total"] - g["alloc"]),
              g.get("nodes_with_free", 0), g.get("pending_jobs", 0), g.get("pending_gpus", 0),
              g.get("pending_held", 0)),
         )
