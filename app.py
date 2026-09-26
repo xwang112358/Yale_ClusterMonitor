@@ -623,6 +623,34 @@ def parse_squeue_running(raw):
     return by_node, all_jobs
 
 
+def _fmt_widths(fmt):
+    """Column widths of a `squeue -O` / `sinfo -O` format string ("JobID:15,...")."""
+    return [int(f.rsplit(":", 1)[1]) for f in fmt.split(",")]
+
+
+_PD_WIDTHS = _fmt_widths(SQUEUE_FMT_PD)
+
+
+def _split_pending(line):
+    """Split a pending-job line into its 9 columns.
+
+    `squeue -O` pads every column to its declared width, so slice by width:
+    a whitespace split shifts every later column when the Reason is empty
+    (a job SLURM has not evaluated yet) or contains a space
+    ("ReqNodeNotAvail, UnavailableNodes:..."), which made such jobs parse
+    with the wrong TRES and drop out of the demand counts. Falls back to a
+    whitespace split for a line that is not the padded width.
+    """
+    if len(line) >= sum(_PD_WIDTHS[:-1]):
+        cols, pos = [], 0
+        for w in _PD_WIDTHS:
+            cols.append(line[pos:pos + w].strip())
+            pos += w
+        if cols[0].split("_")[0].isdigit():      # sanity: JobID (array ids are 123_4)
+            return cols
+    return line.split(None, 8)
+
+
 def parse_squeue_pending(raw):
     out = []
     for line in raw.splitlines():
@@ -630,12 +658,14 @@ def parse_squeue_pending(raw):
             continue
         # Columns (9): JobID User Account Partition Reason TimeLimit
         #              StartTime tres-alloc Name...
-        cols = line.split(None, 8)
+        cols = _split_pending(line)
         if len(cols) < 8:
             continue
         (jobid, user, account, partition, reason, limit,
          start_time, tres) = cols[:8]
         name = cols[8].strip() if len(cols) > 8 else ""
+        if not reason:
+            reason = "None"
         cpus, gpus, gpu_type, mem_mb = parse_tres(tres)
         out.append({
             "jobid": jobid, "user": user, "account": account,
@@ -729,11 +759,19 @@ def fetch_cluster(cluster):
         d["alloc"] += n["gpu_alloc"]
         d["nodes_total"] += 1
         unavailable = n["state"] in UNAVAILABLE_STATES
+        idle_cards = n["gpu_total"] - n["gpu_alloc"]
         if unavailable:
             # Cards SLURM cannot hand out: not allocated, but not free either.
-            d["unavailable"] = d.get("unavailable", 0) + (n["gpu_total"] - n["gpu_alloc"])
-        if n["gpu_alloc"] < n["gpu_total"] and not unavailable:
+            d["unavailable"] = d.get("unavailable", 0) + idle_cards
+        elif idle_cards > 0:
             d["nodes_with_free"] += 1
+            # A free card is only usable if the node still has a CPU and some
+            # memory to give the job: a card on a node with 48/48 CPUs allocated
+            # is free on paper and unschedulable in practice.
+            cpu_idle = n["cpu_total"] - n["cpu_alloc"]
+            mem_free_mb = n["mem_total_mb"] - n["mem_alloc_mb"]
+            if cpu_idle > 0 and mem_free_mb >= 1024:
+                d["usable"] = d.get("usable", 0) + idle_cards
         # Track earliest GPU-job end among nodes of this type that are full.
         if n["gpu_alloc"] >= n["gpu_total"] and n.get("next_gpu_free_at"):
             cur = d.get("soonest_free_at")
@@ -774,6 +812,7 @@ def fetch_cluster(cluster):
         d.setdefault("pending_quota", 0)
         d.setdefault("unavailable", 0)
         d["free"] = max(0, d["total"] - d["alloc"] - d["unavailable"])
+        d["usable"] = min(d.get("usable", 0), d["free"])
     gpu_summary_list = sorted(gpu_summary.values(), key=lambda d: d["type"])
 
     lab_running = [j for j in running if lab_account and j["account"] == lab_account]

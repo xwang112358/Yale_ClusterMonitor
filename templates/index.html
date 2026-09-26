@@ -647,7 +647,7 @@ function renderGpuSummary(summary, untypedJobs, untypedGpus) {
       </div>` : '';
     return `<div class="gpu-chip" data-type="${s.type}">
       <div class="gtype">${s.type}</div>
-      <div class="gnum"><span class="free">${free}</span> free <span style="color:var(--text-dim);">/ ${s.total}</span></div>
+      <div class="gnum"><span class="free">${free}</span> free <span style="color:var(--text-dim);">/ ${s.total}</span>${(free > 0 && s.usable !== undefined && s.usable < free) ? ` <span style="color:var(--yellow);font-size:0.72rem;" title="Free cards whose node still has an idle CPU and memory. The rest sit on nodes with every CPU allocated, so no job can use them yet.">${s.usable} usable</span>` : ''}</div>
       <div class="bar-wrap"><div class="bar-fill ${fillClass(p)}" style="width:${p.toFixed(1)}%"></div></div>
       <div class="gsub">${s.alloc} alloc &middot; ${s.nodes_with_free}/${s.nodes_total} nodes have free GPUs${s.unavailable ? ` &middot; <span title="Unallocated cards on drained / down nodes — SLURM will not schedule them">${s.unavailable} on drained nodes</span>` : ''}</div>
       ${demand}
