@@ -78,9 +78,11 @@
 {% else %}
 <div class="note">
   <b>How to read this.</b> One sample every 5 minutes from the live snapshot, counts only.
-  <b>Chance of a free card</b> is the share of samples in that hour-of-week with at least one card of the type unallocated;
-  <b>average free</b> is the mean number of free cards. Hours are {{ ctx.tz }}, Monday first.
-  A card being free does not mean a new job gets it: the queue ahead of it (dashed line) is shown for that reason.
+  A card counts as <b>usable</b> only if it is unallocated <em>and</em> its node still has an idle CPU and memory;
+  idle cards on fully-allocated or drained nodes are false signals and are left out.
+  <b>Chance of a usable card</b> is the share of samples in that hour-of-week with at least one usable card of the type;
+  <b>average usable</b> is the mean count. Hours are {{ ctx.tz }}, Monday first.
+  A usable card still goes to the head of the queue (dashed line), not to whoever is looking.
   {% if ctx.span and ctx.span.days_recorded < 21 %}
   <b>Only {{ ctx.span.days_recorded }} days recorded so far</b> &mdash; hour-of-week patterns need three weeks or more before they mean much.
   {% endif %}
@@ -124,10 +126,10 @@ function heatmap(el, t, mode) {
       : [[0, '#1a1d27'], [0.5, '#2e7d32'], [1, '#4caf50']],
     zmin: 0, zmax: mode === 'p' ? 100 : Math.max(1, h.total),
     xgap: 1, ygap: 1, hoverongaps: false,
-    colorbar: {thickness: 10, len: 0.9, tickfont: {size: 11}, title: {text: mode === 'p' ? '% free' : 'cards', font: {size: 11}}},
-    hovertemplate: '%{y} %{x}:00<br>avg free %{customdata[1]} · chance %{customdata[2]:.0%} · n=%{customdata[0]}<extra></extra>',
+    colorbar: {thickness: 10, len: 0.9, tickfont: {size: 11}, title: {text: mode === 'p' ? '% usable' : 'cards', font: {size: 11}}},
+    hovertemplate: '%{y} %{x}:00<br>avg usable %{customdata[1]} · chance %{customdata[2]:.0%} · n=%{customdata[0]}<extra></extra>',
   }], {...BASE, margin: {...BASE.margin, r: 80},   // room for the colorbar, else it overflows the column
-       title: {text: mode === 'p' ? 'Chance at least one card is free, by hour of week' : 'Average free cards, by hour of week', font: {size: 13}, x: 0},
+       title: {text: mode === 'p' ? 'Chance at least one card is usable, by hour of week' : 'Average usable cards, by hour of week', font: {size: 13}, x: 0},
        xaxis: {title: {text: 'hour of day', font: {size: 11}}, dtick: 2, tickfont: {size: 11}, showgrid: false},
        yaxis: {autorange: 'reversed', tickfont: {size: 11}, showgrid: false}}, CONFIG);
 }
@@ -136,13 +138,15 @@ function timeline(el, t) {
   const tl = CTX.timeline[t];
   const x = tl.ts.map(s => new Date(s * 1000));
   Plotly.react(el, [
-    {x, y: tl.free, type: 'scatter', mode: 'lines', name: 'free cards', line: {color: TYPE_COLORS[t] || '#6c8cff', width: 1.6},
+    {x, y: tl.free_any || tl.free, type: 'scatter', mode: 'lines', name: 'free (incl. unusable)', line: {color: '#57534e', width: 1},
      hovertemplate: '%{x|%a %b %d %H:%M}<br>free %{y}<extra></extra>'},
+    {x, y: tl.free, type: 'scatter', mode: 'lines', name: 'usable cards', line: {color: TYPE_COLORS[t] || '#6c8cff', width: 1.8},
+     hovertemplate: '%{x|%a %b %d %H:%M}<br>usable %{y}<extra></extra>'},
     {x, y: tl.pending_gpus, type: 'scatter', mode: 'lines', name: 'cards requested by queue', line: {color: '#ff9800', width: 1.2, dash: 'dot'},
      yaxis: 'y2', hovertemplate: '%{x|%a %b %d %H:%M}<br>queued %{y}<extra></extra>'},
-  ], {...BASE, title: {text: `Free cards vs queued demand, last ${CTX.days} days`, font: {size: 13}, x: 0},
+  ], {...BASE, title: {text: `Usable cards vs queued demand, last ${CTX.days} days`, font: {size: 13}, x: 0},
       xaxis: {tickfont: {size: 11}, gridcolor: '#2a2d3a'},
-      yaxis: {title: {text: 'free', font: {size: 11}}, rangemode: 'tozero', tickfont: {size: 11}, gridcolor: '#2a2d3a'},
+      yaxis: {title: {text: 'cards', font: {size: 11}}, rangemode: 'tozero', tickfont: {size: 11}, gridcolor: '#2a2d3a'},
       yaxis2: {title: {text: 'queued', font: {size: 11}}, overlaying: 'y', side: 'right', rangemode: 'tozero', tickfont: {size: 11}, showgrid: false},
       legend: {orientation: 'h', y: 1.12, x: 0, font: {size: 11}}, hovermode: 'x unified'}, CONFIG);
 }
@@ -150,7 +154,7 @@ function timeline(el, t) {
 function bestTable(t) {
   const rows = CTX.best[t] || [];
   if (!rows.length) return '<div class="empty">Not enough samples yet for a ranking.</div>';
-  return `<table class="best"><thead><tr><th>Best slots</th><th>chance of a free card</th><th>avg free</th><th>samples</th></tr></thead><tbody>` +
+  return `<table class="best"><thead><tr><th>Best slots</th><th>chance of a usable card</th><th>avg usable</th><th>samples</th></tr></thead><tbody>` +
     rows.map(r => `<tr><td>${r.day} ${String(r.hour).padStart(2, '0')}:00–${String(r.hour + 1).padStart(2, '0')}:00</td>
       <td class="num">${Math.round((r.p_any_free || 0) * 100)}%</td><td class="num">${r.avg_free}</td><td class="num">${r.n}</td></tr>`).join('') +
     `</tbody></table>`;
@@ -169,7 +173,7 @@ if (blocks) {
       <div class="type-head">
         <span class="gtype">${t}</span>
         <span class="meta">${CTX.heat[t].total} cards on the cluster</span>
-        <span class="toggle"><button class="on" data-mode="p">chance free</button><button data-mode="a">avg free</button></span>
+        <span class="toggle"><button class="on" data-mode="p">chance usable</button><button data-mode="a">avg usable</button></span>
       </div>
       <div class="charts"><div id="heat-${id}" class="plot"></div><div id="tl-${id}" class="plot"></div></div>
       ${bestTable(t)}`;

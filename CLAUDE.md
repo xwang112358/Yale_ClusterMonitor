@@ -57,7 +57,11 @@ from a separate dir so the Azure secret stays out of the web app):
   (`QUOTA_REASON_RE`: QOS*/Max*/Assoc*/*Limit, "· N quota-capped"); only Priority/Resources
   jobs count as waiting. **Free excludes cards on drained/down nodes** (`UNAVAILABLE_STATES`;
   `parse_sinfo` strips sinfo's state markers like `drained*`) — a drained node's idle H100s
-  read as "4 free" for a day before this. The recorder stores that corrected `free`.
+  read as "4 free" for a day before this. The recorder stores that corrected `free` AND `usable` (free cards on a node with an idle CPU
+  + >=1 GB memory; a free card on a 48/48-CPU node is a false signal). **The Analysis page is
+  built on `usable`** (heatmap, best slots, timeline; `free` is the grey reference line).
+  `recorder._migrate()` adds `samples.usable`, `hourly.avg_usable/p_any_usable` to an existing
+  DB; rows from before 2026-09-25 read usable = free.
 - **Runtime-only, NOT in git** (`.gitignore`): `.env`, `usage.db`, `users.json`, `.flask_secret`, `.venv/`.
 
 ## Local dev on a fresh machine

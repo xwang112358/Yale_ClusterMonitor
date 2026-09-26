@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS samples (
     pending_jobs  INTEGER NOT NULL,   -- competing jobs asking for this type (held excluded)
     pending_gpus  INTEGER NOT NULL,   -- cards those jobs ask for
     pending_held  INTEGER NOT NULL,   -- jobs asking for this type that are held / not eligible
+    usable        INTEGER,            -- free cards on a node that still has a CPU + memory to give
     PRIMARY KEY (ts, cluster, gpu_type)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS samples_cluster_ts ON samples (cluster, ts);
@@ -67,9 +68,27 @@ CREATE TABLE IF NOT EXISTS hourly (
     avg_pending_gpus  REAL    NOT NULL,
     avg_total         REAL    NOT NULL,
     n                 INTEGER NOT NULL,   -- samples in the hour
+    avg_usable        REAL,
+    p_any_usable      REAL,               -- share of samples with >= 1 USABLE card
     PRIMARY KEY (hour_ts, cluster, gpu_type)
 ) WITHOUT ROWID;
 """
+
+# Columns added after the first deployment (2026-09-25): a free card on a node
+# with every CPU allocated is not usable, and the analysis must not learn
+# from it. Older rows keep NULL and are read as usable = free.
+MIGRATIONS = [
+    ("samples", "usable", "INTEGER"),
+    ("hourly", "avg_usable", "REAL"),
+    ("hourly", "p_any_usable", "REAL"),
+]
+
+
+def _migrate(conn):
+    for table, column, ctype in MIGRATIONS:
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in have:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ctype}")
 
 
 def open_db(path=None):
@@ -77,6 +96,7 @@ def open_db(path=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=30)
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
 
 
@@ -90,11 +110,13 @@ def record(conn, slug, data):
     )
     n = 0
     for g in data.get("gpu_summary", []):
+        free = g.get("free", g["total"] - g["alloc"])
         cur = conn.execute(
-            "INSERT OR IGNORE INTO samples VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (ts, slug, g["type"].lower(), g["total"], g["alloc"], g.get("free", g["total"] - g["alloc"]),
+            "INSERT OR IGNORE INTO samples (ts, cluster, gpu_type, total, alloc, free, nodes_free, "
+            "pending_jobs, pending_gpus, pending_held, usable) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (ts, slug, g["type"].lower(), g["total"], g["alloc"], free,
              g.get("nodes_with_free", 0), g.get("pending_jobs", 0), g.get("pending_gpus", 0),
-             g.get("pending_held", 0)),
+             g.get("pending_held", 0), g.get("usable", free)),
         )
         n += cur.rowcount
     return n
@@ -111,9 +133,12 @@ def rollup(conn, now=None):
     since = hour_start - ROLLUP_WINDOW
     conn.execute(
         """INSERT OR REPLACE INTO hourly
+           (hour_ts, cluster, gpu_type, avg_free, min_free, max_free, p_any_free,
+            avg_pending_gpus, avg_total, n, avg_usable, p_any_usable)
            SELECT (ts / 3600) * 3600, cluster, gpu_type,
                   AVG(free), MIN(free), MAX(free), AVG(free > 0),
-                  AVG(pending_gpus), AVG(total), COUNT(*)
+                  AVG(pending_gpus), AVG(total), COUNT(*),
+                  AVG(COALESCE(usable, free)), AVG(COALESCE(usable, free) > 0)
            FROM samples WHERE ts >= ? GROUP BY (ts / 3600) * 3600, cluster, gpu_type""",
         (since,),
     )

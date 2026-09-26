@@ -1,9 +1,11 @@
 """Aggregate the recorded GPU history for the /history page.
 
 Reads HISTORY_DB (written by recorder.py) and answers, per high-end GPU
-type: when are cards free (hour-of-week heatmap), how did free cards and
-queued demand move over the window, and which hour-of-week slots are the
-best bet. Returns plain numbers; the page draws them with Plotly client-side
+type: when are cards USABLE (hour-of-week heatmap), how did usable cards
+and queued demand move over the window, and which hour-of-week slots are
+the best bet. "Usable" = free AND on a node that still has an idle CPU and
+memory; a free card on a fully-allocated node is a false signal and is not
+counted. Rows recorded before the usable column existed count free as usable. Returns plain numbers; the page draws them with Plotly client-side
 so the droplet's single core does no chart work.
 
 Hours are in US Eastern (the clusters' and the lab's clock), Monday first.
@@ -71,33 +73,34 @@ def build_history(slug, days=30, now=None):
         # Source rows: raw 5-min samples inside the raw-retention window,
         # hourly averages beyond it (older raw rows are gone by design).
         rows = conn.execute(
-            "SELECT ts, gpu_type, free, total, pending_gpus, pending_jobs FROM samples "
+            "SELECT ts, gpu_type, COALESCE(usable, free), total, pending_gpus, free FROM samples "
             "WHERE cluster = ? AND ts >= ? ORDER BY ts", (slug, since)).fetchall()
         raw_lo = min((r[0] for r in rows), default=None)
         if raw_lo is None or raw_lo > since + 3600:
             hrows = conn.execute(
-                "SELECT hour_ts, gpu_type, avg_free, avg_total, avg_pending_gpus, n FROM hourly "
-                "WHERE cluster = ? AND hour_ts >= ? AND hour_ts < ? ORDER BY hour_ts",
+                "SELECT hour_ts, gpu_type, COALESCE(avg_usable, avg_free), avg_total, avg_pending_gpus, avg_free "
+                "FROM hourly WHERE cluster = ? AND hour_ts >= ? AND hour_ts < ? ORDER BY hour_ts",
                 (slug, since, raw_lo or now)).fetchall()
-            rows = [(h, t, af, at, ap, 0) for (h, t, af, at, ap, _n) in hrows] + rows
+            rows = [(h, t, au, at, ap, af) for (h, t, au, at, ap, af) in hrows] + rows
 
         bucket = 3600 if days > 7 else 900        # timeline resolution: 15 min / 1 h
         for t in types:
             heat_sum, heat_n, heat_any = _grid(), _grid(0), _grid(0)
             tl = {}
             total_seen = 0
-            for ts, gt, free, total, pend_gpus, _pj in rows:
+            for ts, gt, usable, total, pend_gpus, free in rows:
                 if gt != t:
                     continue
                 dow, hour = _hour_of_week(ts)
-                heat_sum[dow][hour] += free
+                heat_sum[dow][hour] += usable
                 heat_n[dow][hour] += 1
-                heat_any[dow][hour] += 1 if free > 0 else 0
+                heat_any[dow][hour] += 1 if usable > 0 else 0
                 b = ts - ts % bucket
-                acc = tl.setdefault(b, [0.0, 0.0, 0])
-                acc[0] += free
+                acc = tl.setdefault(b, [0.0, 0.0, 0, 0.0])
+                acc[0] += usable
                 acc[1] += pend_gpus
                 acc[2] += 1
+                acc[3] += free or 0
                 total_seen = max(total_seen, total or 0)
             avg = [[round(heat_sum[d][h] / heat_n[d][h], 2) if heat_n[d][h] else None for h in range(24)]
                    for d in range(7)]
@@ -107,7 +110,8 @@ def build_history(slug, days=30, now=None):
             keys = sorted(tl)
             ctx["timeline"][t] = {
                 "ts": keys,
-                "free": [round(tl[k][0] / tl[k][2], 2) for k in keys],
+                "free": [round(tl[k][0] / tl[k][2], 2) for k in keys],        # usable cards
+                "free_any": [round(tl[k][3] / tl[k][2], 2) for k in keys],    # free incl. unusable
                 "pending_gpus": [round(tl[k][1] / tl[k][2], 1) for k in keys],
                 "total": total_seen,
                 "bucket_seconds": bucket,
